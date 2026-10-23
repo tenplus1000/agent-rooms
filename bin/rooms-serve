@@ -1,0 +1,4 @@
+#!/bin/sh
+# 在本機跑房間核心（之後改成 container）
+HERE=$(dirname "$(readlink -f "$0")")
+PYTHONPATH="$HERE/.." exec python3 -m rooms.server "$@"

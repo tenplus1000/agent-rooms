@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""WSL CLI for the running Windows Codex desktop; no daemon is started."""
+import argparse
+import json
+import pathlib
+import subprocess
+import sys
+
+NODE = pathlib.Path('/mnt/c/Users/<you>/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe')
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('method', choices=['thread/owner', 'thread/settings', 'thread/state', 'turn/start', 'turn/steer', 'rpc'])
+    parser.add_argument('thread_id', nargs='?')
+    parser.add_argument('--text', help='Message text. For turn methods, omit to read text from stdin.')
+    args = parser.parse_args()
+    if args.method == 'rpc':
+        request = json.load(sys.stdin)
+    else:
+        if not args.thread_id:
+            parser.error('thread_id is required')
+        request = {'method': args.method, 'params': {'threadId': args.thread_id}}
+        if args.method.startswith('turn/'):
+            text = args.text if args.text is not None else sys.stdin.read()
+            if not text.strip():
+                parser.error('Message must not be empty')
+            request['params']['input'] = [{'type': 'text', 'text': text}]
+    bridge = pathlib.Path(__file__).resolve().with_name('desktop-bridge.cjs')
+    windows_path = subprocess.check_output(['wslpath', '-w', str(bridge)], text=True).strip()
+    result = subprocess.run([str(NODE), windows_path], input=json.dumps(request, ensure_ascii=False).encode('utf8'), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    sys.stdout.buffer.write(result.stdout)
+    sys.stderr.buffer.write(result.stderr)
+    return result.returncode
+
+if __name__ == '__main__':
+    raise SystemExit(main())
