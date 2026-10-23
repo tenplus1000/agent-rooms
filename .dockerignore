@@ -1,0 +1,7 @@
+data/
+docs/
+tests/
+adapters/
+**/__pycache__/
+**/*.pyc
+.git/
