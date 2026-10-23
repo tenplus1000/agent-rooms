@@ -1,0 +1,4 @@
+#!/bin/sh
+# 轉送程式：替房裡的 Codex 監聽並送進它的對話（跑在本機，不進 container）
+HERE=$(dirname "$(readlink -f "$0")")
+PYTHONPATH="$HERE/.." exec python3 -m rooms.dispatch "$@"

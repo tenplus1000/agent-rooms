@@ -78,6 +78,99 @@ def line_for(event, room_name):
     return head + json.dumps(event, ensure_ascii=False)
 
 
+def kind_of(session):
+    """這個 session 是哪種 agent：先問 acc，acc 沒有（例如 codex exec 不觸發 hook）就看紀錄檔存在哪。"""
+    kind = acc_session(session).get("agent", "")
+    if kind:
+        return kind
+    import glob
+    home = os.path.expanduser("~")
+    if glob.glob(f"{home}/.claude/projects/*/{session}.jsonl") or \
+            glob.glob(f"/mnt/c/Users/*/.claude/projects/*/{session}.jsonl"):
+        return "claude"
+    if glob.glob(f"{home}/.codex/sessions/*/*/*/*{session}*.jsonl") or \
+            glob.glob(f"/mnt/c/Users/*/.codex/sessions/*/*/*/*{session}*.jsonl"):
+        return "codex"
+    return ""
+
+
+def acc_session(session):
+    """從 acc 讀這個 session 的紀錄（agent 種類、cwd）；讀不到就回空的。"""
+    try:
+        import subprocess
+        root = subprocess.run(["acc", "root"], capture_output=True, text=True, timeout=5).stdout.strip()
+        for sub in ("", "archive/"):
+            path = os.path.join(root, "goals", "sessions", sub + session + ".json")
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as fh:
+                    return json.load(fh)
+    except Exception:
+        pass
+    return {}
+
+
+RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
+- 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 使用者 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
+- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@user 找 使用者）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
+- 只處理這間房的事；別的房間你看不到，也不要去找。"""
+
+CODEX_RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
+- 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 使用者 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
+- 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@user 找 使用者）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。
+- 只處理這間房的事；別的房間你看不到，也不要去找。"""
+
+LISTEN_HINT = "你還沒有在監聽這間房。請用 Monitor 執行 `{room_cmd} listen --session {session}`（逾時設最長，到期就重開），房裡有人找你時才會叫醒你。"
+
+
+def hook():
+    """hook 不能擋住使用者：任何錯誤都不輸出、exit 0。"""
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        session = payload.get("session_id", "")
+        event_name = payload.get("hook_event_name", "UserPromptSubmit")
+        if not session:
+            return
+        rooms = _quick("GET", "/api/rooms", {"as": session})
+        if not rooms:
+            return
+        room = rooms[0]
+        me = next((m for m in room["members"] if m["session"] == session), None)
+        if me is None:
+            return
+        full = event_name == "UserPromptSubmit"
+        # 使用者開口那一輪：把累積的都補上；做事中途：只有該叫醒他時才插話
+        got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "0",
+                                            "triggers_only": "0" if full else "1"})
+        lines = [line_for(e, room["name"]) for e in (got or {}).get("events", [])]
+        room_cmd = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "room")
+        info = dict(room=room["name"], room_id=room["room_id"], name=me["name"], owner=room["owner_name"],
+                    session=session, room_cmd=room_cmd)
+        parts = []
+        if full:
+            parts.append((CODEX_RULES if me["kind"] == "codex" else RULES).format(**info))
+            if me["kind"] == "claude" and not me["online"]:
+                parts.append(LISTEN_HINT.format(**info))
+        if lines:
+            parts.append("房間的新訊息：\n" + "\n".join(lines))
+        if not parts or (not full and not lines):
+            return
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": event_name,
+                                                 "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False))
+    except Exception:
+        return
+
+
+def _quick(method, path, params):
+    """hook 用：兩秒內沒回就算了，不能拖慢使用者。"""
+    url = BASE + path + "?" + urllib.parse.urlencode(params)
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method=method), timeout=2) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    return payload.get("result") if payload.get("ok") else None
+
+
 def show(result):
     print(json.dumps(result, ensure_ascii=False, indent=1))
 
@@ -112,6 +205,8 @@ def main(argv=None):
     s = sub.add_parser("close-thread"); s.add_argument("thread_id"); s.add_argument("--note", default="")
     s = sub.add_parser("dnd"); s.add_argument("state", choices=["on", "off"]); s.add_argument("--target")
     s = sub.add_parser("listen"); s.add_argument("--once", action="store_true"); s.add_argument("--wait", type=float, default=50)
+    s.add_argument("--every", action="store_true", help="每個事件都回（預設只在被 @、任務跟你有關時才回，背景一起帶上）")
+    s = sub.add_parser("hook", help="給 Claude／Codex 的 hook 用：stdin 讀 hook 的 JSON，有房間訊息就注入")
     sub.add_parser("overview")
 
     t = sub.add_parser("task").add_subparsers(dest="action", required=True)
@@ -131,6 +226,8 @@ def main(argv=None):
     if a.user and a.session:
         sys.exit("--session 和 --user 只能選一個")
     actor = "user" if a.user else a.session
+    if a.cmd == "hook":
+        return hook()
     if not actor and a.cmd not in ("overview",):
         sys.exit("要帶 --session <自己的 session id>，或 --user")
 
@@ -141,11 +238,13 @@ def main(argv=None):
     if a.cmd == "create":
         return show(call("POST", "/api/rooms", actor, name=a.name))
     if a.cmd == "join":
-        call("POST", "/api/register", session=actor, kind=a.kind, name=a.name)
+        call("POST", "/api/register", session=actor, kind=a.kind or kind_of(actor), name=a.name)
         return show(call("POST", "/api/move", actor, session=actor, room_id=a.room_id))
     if a.cmd == "leave":
         return show(call("POST", "/api/move", actor, session=actor, room_id=None))
     if a.cmd == "move":
+        kind = kind_of(a.target)
+        call("POST", "/api/register", session=a.target, kind=kind)
         return show(call("POST", "/api/move", actor, session=a.target, room_id=None if a.room_id == "none" else a.room_id))
     if a.cmd == "moves":
         return show(call("GET", "/api/moves", actor, session=actor))
@@ -161,7 +260,8 @@ def main(argv=None):
         down = False
         while True:
             try:
-                got = call("GET", "/api/listen", session=actor, wait=a.wait)
+                got = call("GET", "/api/listen", session=actor, wait=a.wait,
+                       triggers_only=None if a.every else "1")
                 if down:
                     print("〔房間核心接回來了，繼續監聽〕", flush=True)
                     down = False

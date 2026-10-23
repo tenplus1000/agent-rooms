@@ -69,6 +69,15 @@ class CoreTest(unittest.TestCase):
         self.core.post("s-cx1", self.room, "好，看了")
         self.assertEqual(self.core.threads("s-claude", self.room), [])
 
+    def test_task_action_or_leaving_answers_the_mention(self):
+        self.core.move("s-cx1", "s-cx1", self.room)
+        self.core.move("s-cx2", "s-cx2", self.room)
+        task = self.core.create_task("s-claude", self.room, "我要做 A", "做完")["id"]
+        self.core.post("s-claude", self.room, "@codex-1 @codex-2 誰來領")
+        self.core.claim("s-cx1", task)
+        self.core.move("s-cx2", "s-cx2", None)
+        self.assertEqual([t for t in self.core.threads("s-claude", self.room) if t["kind"] == "mention"], [])
+
     def test_repeat_mentions_keep_one_thread(self):
         self.core.move("s-cx1", "s-cx1", self.room)
         self.core.post("s-claude", self.room, "@codex-1 第一次")

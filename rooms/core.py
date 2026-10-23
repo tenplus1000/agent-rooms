@@ -21,6 +21,8 @@ from pathlib import Path
 
 USER = "user"
 ONLINE_SECONDS = 75          # 監聽一輪最長 50 秒，再寬一點才算離線
+MAX_HOPS = 6                 # agent 之間連續互相 @ 幾次就暫停，等 使用者 開口（agentchattr 的 loop guard）
+EVERYONE = ("all", "全部", "大家")
 MENTION = re.compile(r"@([\w\-\.㐀-鿿]+)")
 
 
@@ -196,6 +198,7 @@ class Core:
             if before == room_id:
                 return dict(agent)
             if before:
+                self._answered(before, session, "離開房間")
                 self._emit(before, "leave", session)
             agent["room_id"] = room_id
             if room_id:
@@ -292,14 +295,29 @@ class Core:
             raise RoomError("訊息不能是空的")
         with self.cond:
             self._require_see(actor, room_id)
+            room = self.state["rooms"][room_id]
             mentions = [m for m in self._resolve_mentions(room_id, text) if m != actor]
-            # 他開口了，就是在回應：等他回話的線頭關掉（之後交給判官做更細的判斷）
-            for thread in self.state["threads"].values():
-                if thread["room_id"] == room_id and thread["whose"] == actor and not thread.get("closed") \
-                        and thread["kind"] == "mention":
-                    thread["closed"] = _now()
-                    thread["closed_by"] = actor
-            event = self._emit(room_id, "post", actor, text=text, mentions=mentions)
+            # 他開口了，就是在回應（之後交給判官做更細的判斷）
+            self._answered(room_id, actor, "發言")
+            members = [m for m in self._members(room_id) if m != actor]
+            everyone = any(n.lower() in EVERYONE for n in MENTION.findall(text))
+            wake = [m for m in members if everyone or m in mentions]
+            if actor == USER:
+                room["hops"] = 0
+                room["paused"] = False
+                if not mentions and not everyone and room["owner"] in members:
+                    wake.append(room["owner"])       # 使用者 沒點名就是對負責人說
+            elif wake:
+                room["hops"] = room.get("hops", 0) + 1
+                if room["hops"] > MAX_HOPS and not room.get("paused"):
+                    room["paused"] = True
+                    self._open_thread(room_id, USER, actor,
+                                      f"agent 之間連續互相 @ 超過 {MAX_HOPS} 次，已暫停叫醒；使用者 在房裡講一句話就恢復",
+                                      "paused")
+                if room.get("paused"):
+                    wake = []                       # 暫停中：訊息照記，不叫醒人
+            event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake,
+                               held=bool(room.get("paused")) and actor != USER)
             for target in mentions:
                 self._open_thread(room_id, target, actor, text, "mention", ref=event["seq"])
             self._commit()
@@ -319,6 +337,15 @@ class Core:
                   "needs_user": whose == USER}
         self.state["threads"][thread_id] = thread
         return thread
+
+    def _answered(self, room_id, session, note):
+        """他在這間房有動作了（發言、領任務、交件），或離開了：等他回話的線頭關掉。"""
+        for thread in self.state["threads"].values():
+            if thread["room_id"] == room_id and thread["whose"] == session and not thread.get("closed") \
+                    and thread["kind"] in ("mention", "paused"):
+                thread["closed"] = _now()
+                thread["closed_by"] = session
+                thread["note"] = note
 
     def threads(self, actor, room_id, open_only=True):
         with self.cond:
@@ -361,31 +388,75 @@ class Core:
         rows = [e for e in self.events.get(room_id, []) if e["seq"] > cursor and e["from"] != session]
         return room_id, rows
 
-    def listen(self, session, wait=50.0, limit=200):
-        """長輪詢：有新事件就回，沒有就等到 wait 秒。回傳後游標前進（送出即算已讀）。
+    def listen(self, session, wait=50.0, limit=200, triggers_only=False, consume=True, heartbeat=True):
+        """長輪詢：有新事件就回，沒有就等到 wait 秒。
 
-        監聽本身就是心跳：畫面上的「在不在」看最後一次監聽的時間。
+        triggers_only：只有出現「該叫醒他」的事件（event["wake"] 有他）才回，
+          回的時候把累積的背景一起帶上；沒有就繼續等，背景留著不動。
+        consume：回傳後游標前進（送出即算已讀）。轉送程式用 False，送成功再 ack。
+        heartbeat：監聽本身就是心跳，畫面上的「在不在」看最後一次監聽的時間。
+          轉送程式替 Codex 監聽時用 False，在不在由它另外回報。
         """
         deadline = time.time() + max(0.0, min(wait, 55.0))
         with self.cond:
             self._agent(session)
             while True:
                 agent = self.state["agents"][session]
-                agent["listening_at"] = time.time()
+                if heartbeat:
+                    agent["listening_at"] = time.time()
                 room_id, rows = self.pending(session)
-                if rows:
+                ready = rows and (not triggers_only or any(session in e.get("wake", ()) for e in rows))
+                if ready:
                     rows = rows[:limit]
-                    agent["cursor"][room_id] = rows[-1]["seq"]
+                    if consume:
+                        agent["cursor"][room_id] = rows[-1]["seq"]
                     self._save()
                     return {"room_id": room_id, "dnd": agent["dnd"], "events": rows}
                 left = deadline - time.time()
                 if left <= 0:
-                    # 自己的事件也要推進游標，不然下次還會掃到它們
-                    if room_id and not agent["dnd"] and self.events.get(room_id):
+                    # 只剩他自己的事件時推進游標，不然下次還會掃到它們
+                    if consume and not triggers_only and room_id and not agent["dnd"] and self.events.get(room_id):
                         agent["cursor"][room_id] = self.events[room_id][-1]["seq"]
                     self._save()
                     return {"room_id": room_id, "dnd": agent["dnd"], "events": []}
                 self.cond.wait(left)
+
+    def touch(self, session):
+        """轉送程式確認 Codex 那邊找得到這個對話時，替它記一次心跳。"""
+        with self.cond:
+            self._agent(session)["listening_at"] = time.time()
+            self._save()
+
+    def ack(self, session, room_id, seq):
+        """轉送程式送成功後才把游標推到 seq。"""
+        with self.cond:
+            agent = self._agent(session)
+            current = agent["cursor"].get(room_id, 0)
+            agent["cursor"][room_id] = max(current, int(seq))
+            self._save()
+            return agent["cursor"][room_id]
+
+    def record_delivery(self, session, action, detail="", light=False):
+        """每一次叫醒、插話、延後、擋下都記一筆；light=True 時在他所在的房間亮燈。"""
+        with self.cond:
+            agent = self._agent(session)
+            row = {"at": _now(), "session": session, "name": agent["name"], "room_id": agent.get("room_id"),
+                   "action": action, "detail": detail}
+            with (self.data / "deliveries.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            agent["delivery"] = {"at": row["at"], "action": action, "detail": detail}
+            if light and agent.get("room_id"):
+                self._open_thread(agent["room_id"], USER, session, f"{agent['name']}：{detail}", "delivery",
+                                  ref=action)
+            self._commit()
+            return row
+
+    def deliveries(self, limit=200):
+        path = self.data / "deliveries.jsonl"
+        if not path.exists():
+            return []
+        rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        return rows[-limit:]
 
     # ── 任務（照 acc 的 Objective；差別是由檢查者結案）─────────
 
@@ -395,11 +466,27 @@ class Core:
             raise RoomError(f"沒有這份任務：{task_id}", 404)
         return task
 
-    def _task_log(self, task, actor, action, note="", **extra):
+    def _task_log(self, task, actor, action, note="", prev_holder=None, **extra):
         task["history"].append({"at": _now(), "by": actor, "by_name": self.name_of(actor),
                                 "action": action, "note": note, **extra})
+        # 這件事要叫醒誰：新任務叫醒房裡其他人來領；交件叫醒檢查者；
+        # 結案、改寫、取消、更正叫醒做的人。領走、暫停只是記錄。
+        if action in ("claim", "submit", "park"):
+            self._answered(task["room_id"], actor, f"任務 {task['id']} {action}")
+        members = [m for m in self._members(task["room_id"]) if m != actor]
+        holder = task["holder"] or prev_holder
+        if action == "create":
+            wake = members
+        elif action == "submit":
+            wake = [task["verifier"]]
+        elif action in ("achieved", "failed", "revise", "drop", "amend"):
+            wake = [holder] if holder else []
+        else:
+            wake = []
+        wake = [w for w in wake if w in members]
         self._emit(task["room_id"], "task", actor, task_id=task["id"], action=action,
-                   status=task["status"], objective=task["objective"], note=note)
+                   status=task["status"], objective=task["objective"], note=note,
+                   holder=holder, verifier=task["verifier"], wake=wake)
 
     def create_task(self, actor, room_id, objective, criteria, verifier=None):
         with self.cond:
@@ -490,8 +577,9 @@ class Core:
             if actor not in (USER, task["holder"]) and not self._is_room_owner(actor, task["room_id"]):
                 raise RoomError("只有做的人、負責人和 使用者 能暫停", 403)
             task["status"] = "parked"
+            prev = task["holder"]
             task["holder"] = None
-            self._task_log(task, actor, "park", reason)
+            self._task_log(task, actor, "park", reason, prev_holder=prev)
             self._commit()
             return dict(task)
 
@@ -519,9 +607,10 @@ class Core:
             if task["status"] in ("achieved", "failed", "dropped"):
                 raise RoomError(f"{task_id} 已經結案", 409)
             task["status"] = "dropped"
+            prev = task["holder"]
             task["holder"] = None
             task["closed_by"] = actor
-            self._task_log(task, actor, "drop", reason)
+            self._task_log(task, actor, "drop", reason, prev_holder=prev)
             self._close_review_threads(task_id, actor)
             self._commit()
             return dict(task)
@@ -552,6 +641,7 @@ class Core:
             agents = []
             for sid, a in self.state["agents"].items():
                 agents.append({"session": sid, "name": a["name"], "kind": a["kind"],
-                               "room_id": a.get("room_id"), "online": self._online(a), "dnd": a["dnd"]})
+                               "room_id": a.get("room_id"), "online": self._online(a), "dnd": a["dnd"],
+                               "delivery": a.get("delivery")})
             return {"rooms": [self._room_view(rid) for rid in self.state["rooms"]], "agents": agents}
 

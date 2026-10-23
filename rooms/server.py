@@ -80,7 +80,19 @@ def make_handler(core):
             if method == "POST" and path == "/api/dnd":
                 return core.set_dnd(actor, a["session"], a.get("on") in (True, "1", "true", 1))
             if method == "GET" and path == "/api/listen":
-                return core.listen(a["session"], float(a.get("wait", 50)))
+                flag = lambda k, d: str(a.get(k, d)).lower() in ("1", "true")
+                return core.listen(a["session"], float(a.get("wait", 50)), int(a.get("limit", 200)),
+                                   triggers_only=flag("triggers_only", "0"), consume=flag("consume", "1"),
+                                   heartbeat=flag("heartbeat", "1"))
+            if method == "POST" and path == "/api/ack":
+                return core.ack(a["session"], a["room_id"], a["seq"])
+            if method == "POST" and path == "/api/touch":
+                return core.touch(a["session"])
+            if method == "POST" and path == "/api/delivery":
+                return core.record_delivery(a["session"], a["action"], a.get("detail", ""),
+                                            a.get("light") in (True, "1", "true", 1))
+            if method == "GET" and path == "/api/deliveries":
+                return core.deliveries(int(a.get("limit", 200)))
             if path == "/api/rooms":
                 if method == "POST":
                     return core.create_room(actor, a.get("name", ""))
