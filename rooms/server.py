@@ -77,6 +77,8 @@ def make_handler(core):
                 return core.move(actor, a["session"], a.get("room_id") or None)
             if method == "GET" and path == "/api/moves":
                 return core.moves(actor, a["session"])
+            if method == "POST" and path == "/api/role":
+                return core.set_role(actor, a["session"], a.get("role", ""))
             if method == "POST" and path == "/api/off":
                 return core.set_off(actor, a["session"], a.get("on") in (True, "1", "true", 1), a.get("reason", ""))
             if method == "POST" and path == "/api/dnd":
@@ -111,7 +113,8 @@ def make_handler(core):
                         return core.set_whiteboard(actor, room_id, a.get("text", ""))
                     return core.whiteboard(actor, room_id)
                 if sub == "post" and method == "POST":
-                    return core.post(actor, room_id, a.get("text", ""))
+                    text = a.get("text", "")
+                    return core.post(actor, room_id, text, judged=core.judge_wake(actor, room_id, text))
                 if sub == "threads":
                     return core.threads(actor, room_id, open_only=a.get("all") not in ("1", "true", True))
                 if sub == "tasks":

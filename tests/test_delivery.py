@@ -1,6 +1,7 @@
+import os
+os.environ["ROOMS_JUDGE"] = "off"          # 測試不打真的判官；判官另外 mock
 import io
 import json
-import os
 import tempfile
 import threading
 import unittest
@@ -39,6 +40,35 @@ class WakeTest(unittest.TestCase):
         self.assertEqual(self.wake_of(self.core.post("s-a", self.room, "我做完了")), ["s-boss"])
         self.assertEqual(self.wake_of(self.core.post("s-a", self.room, "@b 我做完了")), ["s-b"])
         self.assertEqual(self.core.post("s-boss", self.room, "大家辛苦")["wake"], [])   # 負責人自己沒點名就是背景
+
+    def judged_post(self, actor, text, probs=None, error=None):
+        with mock.patch.dict(os.environ, {"ROOMS_JUDGE": "on", "ROOMS_JUDGE_KEY": "k"}), \
+                mock.patch("rooms.judge.addressees", return_value=(probs, error)) as ask:
+            judged = self.core.judge_wake(actor, self.room, text)
+        return self.core.post(actor, self.room, text, judged=judged), ask
+
+    def test_judge_wakes_whoever_the_message_is_for(self):
+        self.core.set_role("s-boss", "s-b", "從尾端支援 a")
+        event, ask = self.judged_post("s-a", "請 b 停止支援", {"主持": 0.55, "b": 0.93})
+        self.assertEqual(self.wake_of(event), ["s-b", "s-boss"])
+        roles = dict(ask.call_args[0][2])
+        self.assertIn("從尾端支援 a", roles["b"])                       # 判官看得到每個人在做什麼
+        self.assertIn("房間負責人", roles["主持"])
+        self.assertEqual(ask.call_args[0][5], ["主持", "b"])             # 不問說話的人
+
+    def test_judge_says_nobody_means_background(self):
+        event, _ = self.judged_post("s-a", "我去喝杯水", {"主持": 0.16, "b": 0.08})
+        self.assertEqual(event["wake"], [])
+
+    def test_judge_unreachable_falls_back_to_owner(self):
+        event, _ = self.judged_post("s-a", "做完了", None, "URLError: timed out")
+        self.assertEqual(event["wake"], ["s-boss"])
+        self.assertIn("error", event["judged"])
+
+    def test_mentions_and_user_skip_the_judge(self):
+        _, ask = self.judged_post("s-a", "@b 換你", {})
+        _, ask2 = self.judged_post(USER, "大家好", {})
+        self.assertFalse(ask.called or ask2.called)
 
     def test_user_without_mention_talks_to_the_owner(self):
         self.assertEqual(self.wake_of(self.core.post(USER, self.room, "這個怎麼樣")), ["s-boss"])

@@ -1,3 +1,5 @@
+import os
+os.environ["ROOMS_JUDGE"] = "off"          # 測試不打真的判官；判官另外 mock
 import tempfile
 import threading
 import time

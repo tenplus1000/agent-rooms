@@ -19,6 +19,8 @@ import threading
 import time
 from pathlib import Path
 
+from rooms import judge
+
 USER = "user"
 ONLINE_SECONDS = 75          # 監聽一輪最長 50 秒，再寬一點才算離線
 MAX_HOPS = 20                # agent 之間連續互相 @ 幾次就暫停，等 使用者 開口（agentchattr 的 loop guard）
@@ -232,7 +234,7 @@ class Core:
         for sid in self._members(room_id):
             a = self.state["agents"][sid]
             members.append({"session": sid, "name": a["name"], "kind": a["kind"],
-                            "online": self._online(a), "dnd": a["dnd"], "off": a.get("off"),
+                            "online": self._online(a), "dnd": a["dnd"], "off": a.get("off"), "role": a.get("role", ""),
                             "did": self._did(room_id, sid)})
         lit = [t for t in self.state["threads"].values()
                if t["room_id"] == room_id and not t.get("closed") and t["whose"] == USER]
@@ -290,7 +292,50 @@ class Core:
                 found.append(target)
         return found
 
-    def post(self, actor, room_id, text):
+    def set_role(self, actor, session, role):
+        """成員在做什麼（一句話）。判官靠它判斷沒 @ 的訊息在找誰。使用者、負責人或本人可以改。"""
+        with self.cond:
+            agent = self._agent(session)
+            room = self.state["rooms"].get(agent.get("room_id") or "")
+            if actor not in (USER, session) and not (room and room["owner"] == actor):
+                raise RoomError("只有 使用者、房間負責人或本人能改", 403)
+            agent["role"] = role.strip()
+            self._commit()
+            return dict(agent)
+
+    def _role_line(self, sid, room):
+        agent = self.state["agents"][sid]
+        doing = agent.get("role")
+        if not doing:
+            held = [t["objective"] for t in self.state["tasks"].values()
+                    if t.get("holder") == sid and t["status"] == "active"]
+            doing = "；".join(held) or "（沒寫在做什麼）"
+        kind = {"claude": "Claude", "codex": "Codex"}.get(agent["kind"], agent["kind"] or "agent")
+        return kind + ("，房間負責人" if room["owner"] == sid else "") + "：" + doing
+
+    def judge_wake(self, actor, room_id, text):
+        """沒 @ 任何人的成員發言，先問判官在找誰（呼叫時不拿鎖，判官慢不會卡住整個房間）。
+
+        回 {"probs": {名字: 機率}} 或 {"error": 原因}；不用問（有 @、使用者 講話、判官關著）回 None。
+        """
+        with self.cond:
+            self._require_see(actor, room_id)
+            if actor == USER or not text.strip() or not judge.enabled():
+                return None
+            names = MENTION.findall(text)
+            if self._resolve_mentions(room_id, text) or any(n.lower() in EVERYONE for n in names):
+                return None
+            room = self.state["rooms"][room_id]
+            members = self._members(room_id)
+            roles = [(self.name_of(sid), self._role_line(sid, room)) for sid in members]
+            targets = [self.name_of(sid) for sid in members if sid != actor]
+            speaker, room_name = self.name_of(actor), room["name"]
+        if not targets:
+            return None
+        probs, error = judge.addressees(str(self.data / "judge.jsonl"), room_name, roles, speaker, text, targets)
+        return {"error": error} if probs is None else {"probs": probs}
+
+    def post(self, actor, room_id, text, judged=None):
         if not text.strip():
             raise RoomError("訊息不能是空的")
         with self.cond:
@@ -307,8 +352,11 @@ class Core:
                 room["paused"] = False
                 if not mentions and not everyone and room["owner"] in members:
                     wake.append(room["owner"])       # 使用者 沒點名就是對負責人說
+            elif not mentions and not everyone and judged and judged.get("probs") is not None:
+                # 判官判過：過門檻的才叫醒；沒有人過就是背景
+                wake = [m for m in members if judged["probs"].get(self.name_of(m), 0) >= judge.THRESHOLD]
             elif not mentions and not everyone and room["owner"] in members:
-                wake.append(room["owner"])           # 成員沒點名（回報、完成）也是對負責人說，不然負責人看不到
+                wake.append(room["owner"])           # 判官叫不到：退回對負責人說，不然負責人看不到
             if actor != USER and wake:
                 room["hops"] = room.get("hops", 0) + 1
                 if room["hops"] > MAX_HOPS and not room.get("paused"):
@@ -319,7 +367,8 @@ class Core:
                 if room.get("paused"):
                     wake = []                       # 暫停中：訊息照記，不叫醒人
             held = bool(room.get("paused")) and actor != USER
-            event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake, held=held)
+            extra = {"judged": judged} if judged else {}
+            event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake, held=held, **extra)
             for target in mentions:
                 self._open_thread(room_id, target, actor, text, "mention", ref=event["seq"])
             self._commit()

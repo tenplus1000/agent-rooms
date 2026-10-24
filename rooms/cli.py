@@ -118,7 +118,7 @@ def acc_session(session):
 
 RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 使用者 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
-- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@user 找 使用者）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
+- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@user 找 使用者）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
 - 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
 CODEX_RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
@@ -256,6 +256,8 @@ def main(argv=None):
     s = sub.add_parser("off", help="把成員標成下線（做完了、視窗關了）：不叫醒，訊息留著")
     s.add_argument("target", nargs="?", help="名字或 session；不填就是自己"); s.add_argument("--reason", default="")
     s = sub.add_parser("on", help="把成員標回線上，留著的訊息會補送"); s.add_argument("target", nargs="?")
+    s = sub.add_parser("role", help="寫成員在做什麼（一句話）：沒 @ 的訊息由判官照這個判在找誰")
+    s.add_argument("target"); s.add_argument("text")
     s = sub.add_parser("dnd"); s.add_argument("state", choices=["on", "off"]); s.add_argument("--target")
     s = sub.add_parser("listen"); s.add_argument("--once", action="store_true"); s.add_argument("--wait", type=float, default=50)
     s.add_argument("--every", action="store_true", help="每個事件都回（預設只在被 @、任務跟你有關時才回，背景一起帶上）")
@@ -305,6 +307,10 @@ def main(argv=None):
         return show(call("GET", "/api/rooms", actor))
     if a.cmd == "overview":
         return show(call("GET", "/api/overview"))
+    if a.cmd == "role":
+        members = call("GET", f"/api/rooms/{current_room(actor, a.room)}", actor)["members"]
+        target = next((m["session"] for m in members if a.target in (m["name"], m["session"])), a.target)
+        return show(call("POST", "/api/role", actor, session=target, role=a.text))
     if a.cmd in ("off", "on"):
         target = a.target or actor
         if a.target:

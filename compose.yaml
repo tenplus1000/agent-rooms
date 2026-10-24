@@ -3,6 +3,12 @@ services:
     build: .
     # 用主機使用者的身分寫資料，資料夾裡的檔案才不會變成 root 的
     user: "${ROOMS_UID:-1000}:${ROOMS_GID:-1000}"
+    # 判官（沒 @ 的訊息在找誰）：金鑰從啟動時的 shell 帶進來；ROOMS_JUDGE=off 可關掉
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      ROOMS_JUDGE: ${ROOMS_JUDGE:-}
+      ROOMS_JUDGE_URL: ${ROOMS_JUDGE_URL:-}
+      ROOMS_JUDGE_MODEL: ${ROOMS_JUDGE_MODEL:-}
     volumes:
       - ${ROOMS_DATA_DIR:-./data}:/data
     ports:
