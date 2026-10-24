@@ -22,6 +22,7 @@ from pathlib import Path
 from rooms import judge
 
 USER = "user"
+MAINTAINER = "維修"          # 誰當維修，房裡寫「@維修」都找得到它
 ONLINE_SECONDS = 75          # 監聽一輪最長 50 秒，再寬一點才算離線
 MAX_HOPS = 20
 PAUSED_TEXT = (f"房間暫停了：agent 之間連續互相 @ 超過 {MAX_HOPS} 次（使用者 一直沒出現），之後的訊息照記但不叫醒任何人。"
@@ -113,9 +114,16 @@ class Core:
     def _members(self, room_id):
         return [sid for sid, a in self.state["agents"].items() if a.get("room_id") == room_id]
 
+    def maintainer(self):
+        return self.state.get("maintainer")
+
+    def _admin(self, actor):
+        """使用者 或維修：管得動任何人、任何房間。維修不能用 使用者 的身分發言，它發言就是它自己。"""
+        return actor == USER or (bool(actor) and actor == self.state.get("maintainer"))
+
     def _can_see(self, actor, room_id):
-        """知識邊界：使用者 看得到每一間；agent 只看得到自己此刻所在的那一間。"""
-        if actor == USER:
+        """知識邊界：使用者 和維修看得到每一間；agent 只看得到自己此刻所在的那一間。"""
+        if self._admin(actor):
             return True
         agent = self.state["agents"].get(actor)
         return bool(agent) and agent.get("room_id") == room_id
@@ -126,7 +134,7 @@ class Core:
             raise RoomError("你不在這間房，看不到它的內容", 403)
 
     def _is_room_owner(self, actor, room_id):
-        return actor == USER or self._room(room_id)["owner"] == actor
+        return self._admin(actor) or self._room(room_id)["owner"] == actor
 
     def _online(self, agent):
         seen = agent.get("listening_at")
@@ -167,8 +175,8 @@ class Core:
                 raise RoomError(f"名字 {name} 已經有人用了")
 
     def rename(self, actor, session, name):
-        if actor not in (USER, session):
-            raise RoomError("只有 使用者 或本人能改名", 403)
+        if not self._admin(actor) and actor != session:
+            raise RoomError("只有 使用者、維修或本人能改名", 403)
         with self.cond:
             agent = self._agent(session)
             self._check_name_free(name, session)
@@ -178,14 +186,20 @@ class Core:
 
     # ── 房間與移動 ──────────────────────────────────────
 
-    def create_room(self, actor, name):
+    def create_room(self, actor, name, owner=None):
+        """開房。開的人就是負責人；使用者 或維修可以指定別人當負責人（主持），自己不進去。"""
         if not name.strip():
             raise RoomError("房間要有名字")
         with self.cond:
             if actor != USER:
                 self._agent(actor)
+            if owner and owner != actor:
+                if not self._admin(actor):
+                    raise RoomError("只有 使用者 或維修能替房間指定別的負責人", 403)
+                if owner != USER:
+                    self._agent(owner)
             room_id = self._next("room", "R")
-            self.state["rooms"][room_id] = {"room_id": room_id, "name": name.strip(), "owner": actor,
+            self.state["rooms"][room_id] = {"room_id": room_id, "name": name.strip(), "owner": owner or actor,
                                             "created_at": _now(), "whiteboard": ""}
             self.events[room_id] = []
             self._emit(room_id, "room_created", actor, name=name.strip())
@@ -211,8 +225,8 @@ class Core:
 
         agent 可以移動自己；使用者 可以移動任何人（把點拖進房間）。
         """
-        if actor not in (USER, session):
-            raise RoomError("只有 使用者 或本人能移動這個 agent", 403)
+        if not self._admin(actor) and actor != session:
+            raise RoomError("只有 使用者、維修或本人能移動這個 agent", 403)
         with self.cond:
             agent = self._agent(session)
             if room_id is not None:
@@ -303,6 +317,10 @@ class Core:
     def _resolve_mentions(self, room_id, text):
         """@名字 → session（或 user）。只認此刻在房裡的人和 使用者。"""
         by_name = {self.state["agents"][sid]["name"]: sid for sid in self._members(room_id)}
+        keeper = self.state.get("maintainer")
+        if keeper in self.state["agents"]:
+            by_name.setdefault(self.state["agents"][keeper]["name"], keeper)
+            by_name.setdefault(MAINTAINER, keeper)      # 誰當維修都叫得到「@維修」
         found = []
         for name in MENTION.findall(text):
             if name.lower() == USER:
@@ -318,8 +336,8 @@ class Core:
         with self.cond:
             agent = self._agent(session)
             room = self.state["rooms"].get(agent.get("room_id") or "")
-            if actor not in (USER, session) and not (room and room["owner"] == actor):
-                raise RoomError("只有 使用者、房間負責人或本人能改", 403)
+            if not self._admin(actor) and actor != session and not (room and room["owner"] == actor):
+                raise RoomError("只有 使用者、維修、房間負責人或本人能改", 403)
             agent["role"] = role.strip()
             self._commit()
             return dict(agent)
@@ -368,6 +386,9 @@ class Core:
             members = [m for m in self._members(room_id) if m != actor]
             everyone = any(n.lower() in EVERYONE for n in MENTION.findall(text))
             wake = [m for m in members if everyone or m in mentions]
+            keeper = self.state.get("maintainer")
+            if keeper in mentions and keeper not in members and keeper != actor:
+                wake.append(keeper)                   # 維修不在房裡，@ 它照樣叫醒
             if actor == USER:
                 room["hops"] = 0
                 room["paused"] = False
@@ -391,9 +412,10 @@ class Core:
             event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake, held=held, **extra)
             for target in mentions:
                 self._open_thread(room_id, target, actor, text, "mention", ref=event["seq"])
-            if just_paused and room["owner"] in members:
+            if just_paused and (room["owner"] in members or self.state.get("maintainer")):
                 # 負責人要知道房間停了（發話的人收到的 notice 不會轉告別人），由他告訴 使用者；只叫這一次
-                self._emit(room_id, "paused", actor, text=PAUSED_TEXT, wake=[room["owner"]])
+                self._emit(room_id, "paused", actor, text=PAUSED_TEXT,
+                           wake=[w for w in (room["owner"], self.state.get("maintainer")) if w])
             self._commit()
             if held:
                 # 發話的人要知道：訊息記下了，但沒有人被叫醒
@@ -403,6 +425,34 @@ class Core:
                 return dict(event, notice=f"{'、'.join(off)} 已下線（做完了或視窗關了），不會被叫醒；"
                                           "訊息留著，回到線上時會補給他。")
             return event
+
+    def set_maintainer(self, actor, session):
+        """使用者 指定哪個對話是維修（專門改房間工具的角色）。換人時舊的就不再是。"""
+        if actor != USER:
+            raise RoomError("只有 使用者 能指定維修", 403)
+        with self.cond:
+            agent = self._agent(session)
+            self.state["maintainer"] = session
+            # 從現在起才算：以前各房的事件不補給新的維修
+            for room_id, rows in self.events.items():
+                agent["cursor"][room_id] = max(agent["cursor"].get(room_id, 0), len(rows))
+            self._commit()
+            return {"maintainer": session, "name": agent["name"]}
+
+    def resume(self, actor, room_id):
+        """解除暫停（使用者、維修或負責人）：互相 @ 的計數歸零。"""
+        with self.cond:
+            if not self._is_room_owner(actor, room_id):
+                raise RoomError("只有 使用者、維修或負責人能解除暫停", 403)
+            room = self._room(room_id)
+            was = bool(room.get("paused"))
+            room["hops"] = 0
+            room["paused"] = False
+            for thread in self.state["threads"].values():
+                if thread["room_id"] == room_id and thread["kind"] == "paused" and not thread.get("closed"):
+                    thread.update(closed=_now(), closed_by=actor, note=f"{self.name_of(actor)} 解除暫停")
+            self._commit()
+            return {"room_id": room_id, "resumed": was}
 
     def user_here(self, session):
         """使用者 在某個成員自己的對話裡講話了：等同他在那個成員所在的房間，互相 @ 的計數歸零、暫停解除。"""
@@ -467,8 +517,8 @@ class Core:
     # ── 勿擾與監聽 ──────────────────────────────────────
 
     def set_dnd(self, actor, session, on):
-        if actor not in (USER, session):
-            raise RoomError("只有 使用者 或本人能切勿擾", 403)
+        if not self._admin(actor) and actor != session:
+            raise RoomError("只有 使用者、維修或本人能切勿擾", 403)
         with self.cond:
             agent = self._agent(session)
             agent["dnd"] = bool(on)
@@ -484,8 +534,8 @@ class Core:
         with self.cond:
             agent = self._agent(session)
             room = self.state["rooms"].get(agent.get("room_id") or "")
-            if actor not in (USER, session) and not (room and room["owner"] == actor):
-                raise RoomError("只有 使用者、房間負責人或本人能切下線", 403)
+            if not self._admin(actor) and actor != session and not (room and room["owner"] == actor):
+                raise RoomError("只有 使用者、維修、房間負責人或本人能切下線", 403)
             if on:
                 agent.pop("headless", None)
             elif actor != session:
@@ -504,11 +554,25 @@ class Core:
         """還沒送給他的事件（不含他自己的）。勿擾中一律回空，紀錄留著等補送。"""
         agent = self._agent(session)
         room_id = agent.get("room_id")
-        if not room_id or agent["dnd"]:
+        if agent["dnd"]:
             return room_id, []
-        cursor = agent["cursor"].get(room_id, 0)
-        rows = [e for e in self.events.get(room_id, []) if e["seq"] > cursor and e["from"] != session]
+        rows = []
+        if room_id:
+            cursor = agent["cursor"].get(room_id, 0)
+            rows = [e for e in self.events.get(room_id, []) if e["seq"] > cursor and e["from"] != session]
+        if session == self.state.get("maintainer"):
+            # 維修不用待在房裡：別的房間裡找它的事件（@維修、暫停、送不到）也算它的
+            for other, events in self.events.items():
+                if other == room_id:
+                    continue
+                cursor = agent["cursor"].get(other, 0)
+                rows += [e for e in events if e["seq"] > cursor and session in e.get("wake", ())]
         return room_id, rows
+
+    @staticmethod
+    def _advance(agent, rows):
+        for e in rows:
+            agent["cursor"][e["room_id"]] = max(agent["cursor"].get(e["room_id"], 0), e["seq"])
 
     def listen(self, session, wait=50.0, limit=200, triggers_only=False, consume=True, heartbeat=True):
         """長輪詢：有新事件就回，沒有就等到 wait 秒。
@@ -533,7 +597,7 @@ class Core:
                 if ready:
                     rows = rows[:limit]
                     if consume:
-                        agent["cursor"][room_id] = rows[-1]["seq"]
+                        self._advance(agent, rows)
                     self._save()
                     return {"room_id": room_id, "dnd": agent["dnd"], "off": agent.get("off"),
                             "headless": agent.get("headless"), "events": rows}
@@ -581,6 +645,9 @@ class Core:
             if notify and agent.get("room_id"):
                 members = self._members(agent["room_id"])
                 wake = [m for m in notify if m in members and m != session]
+                keeper = self.state.get("maintainer")
+                if keeper and keeper != session and keeper not in wake:
+                    wake.append(keeper)                # 多半是房間工具本身的問題，維修直接修
                 self._emit(agent["room_id"], "delivery", session, action=action, detail=detail, wake=wake)
             self._commit()
             return row
@@ -778,5 +845,13 @@ class Core:
                                "room_id": a.get("room_id"), "online": self._online(a), "dnd": a["dnd"],
                                "off": a.get("off"), "headless": bool(a.get("headless")),
                                "delivery": a.get("delivery")})
-            return {"rooms": [self._room_view(rid) for rid in self.state["rooms"]], "agents": agents}
+            rooms = []
+            for rid in self.state["rooms"]:
+                view = self._room_view(rid)
+                posts = [e for e in self.events.get(rid, []) if e["type"] in ("post", "paused", "delivery")]
+                view["recent"] = [{"seq": e["seq"], "at": e["at"], "from": e["from_name"], "type": e["type"],
+                                   "text": (e.get("text") or e.get("detail") or "")[:120]} for e in posts[-3:]]
+                view["last_at"] = (self.events.get(rid) or [{}])[-1].get("at")
+                rooms.append(view)
+            return {"rooms": rooms, "agents": agents, "maintainer": self.state.get("maintainer")}
 

@@ -81,6 +81,8 @@ def make_handler(core):
                 return core.set_role(actor, a["session"], a.get("role", ""))
             if method == "POST" and path == "/api/off":
                 return core.set_off(actor, a["session"], a.get("on") in (True, "1", "true", 1), a.get("reason", ""))
+            if method == "POST" and path == "/api/maintainer":
+                return core.set_maintainer(actor, a["session"])
             if method == "POST" and path == "/api/user_here":
                 return core.user_here(a["session"])
             if method == "POST" and path == "/api/dnd":
@@ -101,13 +103,15 @@ def make_handler(core):
                 return core.deliveries(int(a.get("limit", 200)))
             if path == "/api/rooms":
                 if method == "POST":
-                    return core.create_room(actor, a.get("name", ""))
+                    return core.create_room(actor, a.get("name", ""), a.get("owner") or None)
                 return core.list_rooms(actor)
             m = re.fullmatch(r"/api/rooms/(R\d+)(?:/(\w+))?", path)
             if m:
                 room_id, sub = m.groups()
                 if sub is None and method == "GET":
                     return core.room(actor, room_id)
+                if sub == "resume" and method == "POST":
+                    return core.resume(actor, room_id)
                 if sub == "name" and method == "POST":
                     return core.rename_room(actor, room_id, a.get("name", ""))
                 if sub == "history":

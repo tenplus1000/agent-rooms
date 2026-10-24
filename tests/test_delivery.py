@@ -148,6 +148,54 @@ class WakeTest(unittest.TestCase):
         self.core.user_here("s-a")
         self.assertEqual(self.core.room(USER, self.room)["lit"], 1)  # @user 的問題他還沒回，燈留著
 
+    def keeper(self):
+        self.core.register("s-m", "claude", "修房")
+        self.core.set_maintainer(USER, "s-m")
+        return "s-m"
+
+    def test_only_user_names_the_maintainer(self):
+        self.core.register("s-m", "claude", "修房")
+        with self.assertRaises(Exception):
+            self.core.set_maintainer("s-boss", "s-m")
+
+    def test_mention_wakes_the_maintainer_outside_the_room(self):
+        self.keeper()
+        for text in ("@維修 叫不醒工人", "@修房 叫不醒工人"):
+            event = self.core.post("s-a", self.room, text)
+            self.assertIn("s-m", event["wake"])
+        got = self.core.listen("s-m", wait=0, triggers_only=True)
+        self.assertEqual([e["text"] for e in got["events"]], ["@維修 叫不醒工人", "@修房 叫不醒工人"])
+        self.assertEqual(self.core.listen("s-m", wait=0, triggers_only=True)["events"], [])   # 讀過就不再給
+        self.core.post("s-a", self.room, "跟維修無關的話")
+        self.assertEqual(self.core.listen("s-m", wait=0, triggers_only=False)["events"], [])  # 不在房裡：只收找它的
+
+    def test_pause_and_failed_delivery_wake_the_maintainer(self):
+        self.keeper()
+        self.pause()
+        self.core.record_delivery("s-a", "uncertain", "送出後結果不確定", light=True, notify=["s-boss"])
+        kinds = [e["type"] for e in self.core.listen("s-m", wait=0, triggers_only=True)["events"]]
+        self.assertEqual(kinds, ["paused", "delivery"])
+
+    def test_maintainer_manages_any_room_but_speaks_as_itself(self):
+        m = self.keeper()
+        self.assertEqual(len(self.core.list_rooms(m)), 1)                  # 不在房裡也看得到
+        self.core.move(m, "s-a", None)                                     # 移得動別人
+        self.core.set_off(m, "s-b", True, "做完了")
+        room = self.core.create_room(m, "新房", owner="s-a")
+        self.assertEqual(room["owner"], "s-a")                             # 開房指定主持，自己不進去
+        self.assertIsNone(self.core.state["agents"][m].get("room_id"))
+        event = self.core.post(m, self.room, "修好了")
+        self.assertEqual(event["from"], m)                                 # 發言是它自己，不是 使用者
+        with self.assertRaises(Exception):
+            self.core.set_maintainer(m, "s-a")                             # 不能自己換維修
+        with self.assertRaises(Exception):
+            self.core.create_room("s-b", "別人的房", owner="s-a")            # 一般成員不能替人指定主持
+
+    def test_resume_clears_the_pause(self):
+        self.pause()
+        self.assertTrue(self.core.resume("s-boss", self.room)["resumed"])
+        self.assertEqual(self.core.post("s-a", self.room, "@b 繼續")["wake"], ["s-b"])
+
     def test_delivery_records_and_lights_once(self):
         self.core.record_delivery("s-a", "unavailable", "額度用完", light=True)
         self.core.record_delivery("s-a", "unavailable", "額度用完", light=True)
@@ -243,6 +291,19 @@ class HookTest(LiveServer):
         with mock.patch.object(dispatch, "last_seen", return_value=w.user_seen + 100):
             w.check_user()
         self.assertFalse(self.core.state["rooms"][self.room]["paused"])
+
+    def test_maintainer_gets_rules_summary_and_calls(self):
+        self.core.register("s-m", "claude", "修房")
+        self.core.set_maintainer(USER, "s-m")
+        self.core.post("s-cx", self.room, "@維修 送不到")
+        context = self.run_hook("s-m", "UserPromptSubmit")
+        self.assertIn("你是 使用者 房間工具的維修", context)
+        self.assertIn("各房間現況", context)
+        self.assertIn("負責人 主持", context)
+        self.assertIn("@維修 送不到", context)
+        self.assertIsNone(self.run_hook("s-m", "PostToolUse"))           # 沒人再找它就不插話
+        self.core.post("s-cx", self.room, "@維修 還是不行")
+        self.assertIn("還是不行", self.run_hook("s-m", "PostToolUse"))
 
     def test_post_tool_use_only_interrupts_for_triggers(self):
         self.core.post(USER, self.room, "@工人 只是背景")                 # 找的是別人，對主持是背景

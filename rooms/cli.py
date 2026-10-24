@@ -54,12 +54,25 @@ def current_room(actor, given=None):
     rooms = call("GET", "/api/rooms", actor)
     if actor == "user":
         sys.exit("使用者 要指定房間：--room R1")
-    if not rooms:
-        sys.exit("你現在不在任何房間。先 room join <房間>")
-    return rooms[0]["room_id"]
+    # 維修看得到每一間，但不一定在哪一間裡：只認自己是成員的那間
+    mine = [r for r in rooms if any(m["session"] == actor for m in r["members"])]
+    if not mine:
+        sys.exit("你現在不在任何房間：先 room join <房間>，或用 --room R1 指定")
+    return mine[0]["room_id"]
+
+
+def agent_of(name_or_session):
+    """名字或 session → session（全部登記過的點裡找）。"""
+    for a in call("GET", "/api/overview")["agents"]:
+        if name_or_session in (a["name"], a["session"]):
+            return a["session"]
+    return name_or_session
 
 
 def line_for(event, room_name):
+    """room_name 可以是一個名字，或 {房號: 名字}（維修一次收到好幾間房的事件）。"""
+    if isinstance(room_name, dict):
+        room_name = room_name.get(event["room_id"], event["room_id"])
     head = f"【房間 {room_name}（{event['room_id']}）｜來自 {event['from_name']}】"
     kind = event["type"]
     if kind == "post":
@@ -127,11 +140,20 @@ RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{roo
 - 收到成員或別的對話的回報（交件、做完、卡住），回 使用者 的第一句就講誰回報了什麼，不要混在別的狀態裡。
 - 轉達給不在房裡的對話（例如用 SendMessage）時，附上 使用者 原話的時間和你的 session id，對方才查得到那是 使用者 交代的。
 - 等成員回報時，不要用 sleep、until 這類會卡住的指令等，也不用開 Monitor：指令跑著的時候房間訊息進不來；有人交件、回報或找你，房間會在你這一輪結束後叫醒你。
+- 房間工具本身壞了或要改（叫不醒、送不到、要新功能），寫「@維修」找維修，不要自己改房間工具的程式。
 - 只處理這間房的事；別的房間你看不到，也不要去找。"""
+
+MAINTAINER_RULES = """你是 使用者 房間工具的維修（在房裡叫「{name}」，別人寫「@維修」也找得到你）：專門改房間工具本身（{repo}）。你不用待在任何房間，每間房都看得到。
+- 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
+- 管理：`move <名字> <房號|none>`、`rename <名字> <新名字>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`title <房號> <新房名>`、`resume`（解除暫停）、`create <房名> --owner <名字>`（開普通房、指定主持，你不進去）；要開維修房就 `create <房名>` 再 `join`，你自己當主持。你不能用 使用者 的身分發言，回話都是你自己。
+- 有人 @維修、房間暫停、訊息送不到，都會叫醒你：先看那間房的紀錄判斷是房間工具的問題還是那間房自己的事；是工具的問題就修，修完 commit、重建核心（`docker compose up -d --build`）、需要時重啟轉送程式，實測過再回那間房說一聲。
+- 改動照 repo 的慣例：設計理由寫 docs/，commit 訊息不寫私人專案名；commit 後會自動推工作 repo 並同步公開版。
+- 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
 
 CODEX_RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 使用者 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
 - 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@user 找 使用者）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。
+- 房間工具本身壞了或要改（叫不醒、送不到、要新功能），寫「@維修」找維修，不要自己改房間工具的程式。
 - 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
 
@@ -146,14 +168,17 @@ def hook():
             return
         if event_name == "Stop":
             return rewake(session)
+        full = event_name == "UserPromptSubmit"
+        overview = _quick("GET", "/api/overview", {})
+        if overview and overview.get("maintainer") == session:
+            return maintainer_hook(session, event_name, full, overview)
         rooms = _quick("GET", "/api/rooms", {"as": session})
         if not rooms:
             return
-        room = rooms[0]
-        me = next((m for m in room["members"] if m["session"] == session), None)
-        if me is None:
+        room = next((r for r in rooms if any(m["session"] == session for m in r["members"])), None)
+        me = room and next(m for m in room["members"] if m["session"] == session)
+        if not me:
             return
-        full = event_name == "UserPromptSubmit"
         # 房間叫醒那一輪也會觸發 UserPromptSubmit（task-notification），那不是 使用者 開口
         user_typed = full and "<task-notification>" not in str(payload.get("prompt", ""))[:200]
         if user_typed:
@@ -181,6 +206,57 @@ def hook():
                                                  "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False))
     except Exception:
         return
+
+
+def maintainer_hook(session, event_name, full, overview):
+    """維修：不用待在房裡。開口那一輪給規則＋每間房的總覽＋找它的訊息；做事中途只在有人找它時插話。"""
+    got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "1",
+                                        "triggers_only": "0" if full else "1"})
+    names = {r["room_id"]: r["name"] for r in overview["rooms"]}
+    lines = [line_for(e, names) for e in (got or {}).get("events", [])]
+    if not full and not lines:
+        return
+    parts = []
+    if full:
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        me = next((a for a in overview["agents"] if a["session"] == session), {"name": session[:8]})
+        parts.append(MAINTAINER_RULES.format(name=me["name"], session=session,
+                                             room_cmd=os.path.join(repo, "bin", "room"), repo=repo))
+        parts.append(summary_of(overview))
+    if lines:
+        parts.append("找你的訊息：\n" + "\n".join(lines))
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": event_name,
+                                             "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False))
+
+
+def summary_of(overview):
+    """每間房一段：負責人、成員狀態、暫停／亮燈、最後幾則。沒人在的房間收成一行。"""
+    agents = {a["session"]: a for a in overview["agents"]}
+    active, idle = [], []
+    for r in overview["rooms"]:
+        if not r["members"] and not r.get("lit"):
+            idle.append(f"{r['room_id']} {r['name']}")
+            continue
+        flags = [f for f, on in (("暫停中", r.get("paused")), (f"亮燈 {r.get('lit')}", r.get("lit"))) if on]
+        people = []
+        for m in r["members"]:
+            state = "下線" if m.get("off") else ("勿擾" if m.get("dnd") else "")
+            fail = agents.get(m["session"], {}).get("delivery") or {}
+            if fail.get("action") in FAILED:
+                state = (state + "，" if state else "") + f"送不到（{fail['action']}）"
+            people.append(m["name"] + (f"（{state}）" if state else ""))
+        lines = [f"■ {r['room_id']} {r['name']}｜負責人 {r['owner_name']}"
+                 + (f"｜{'、'.join(flags)}" if flags else "") + f"｜成員：{'、'.join(people) or '（沒人）'}"]
+        for e in r.get("recent", []):
+            lines.append(f"  #{e['seq']} {e['at'][5:16]} {e['from']}：{e['text'][:100]}")
+        active.append("\n".join(lines))
+    text = "各房間現況：\n" + "\n".join(active)
+    if idle:
+        text += "\n（沒人在的房間：" + "、".join(idle) + "）"
+    return text
+
+
+FAILED = ("uncertain", "failed_after", "unavailable", "detached", "not_found", "desktop_closed")
 
 
 def rewake(session):
@@ -214,12 +290,16 @@ def rewake(session):
             continue
         if not mine():
             return                          # 已經有新的等待者接手
-        try:
-            call("POST", "/api/ack", session=session, room_id=got["room_id"], seq=got["events"][-1]["seq"])
-        except (CoreDown, SystemExit):
-            pass
-        name = _quick("GET", f"/api/rooms/{got['room_id']}", {"as": session}) or {}
-        lines = [line_for(e, name.get("name", got["room_id"])) for e in got["events"]]
+        last = {}
+        for e in got["events"]:
+            last[e["room_id"]] = max(last.get(e["room_id"], 0), e["seq"])
+        for room_id, seq in last.items():
+            try:
+                call("POST", "/api/ack", session=session, room_id=room_id, seq=seq)
+            except (CoreDown, SystemExit):
+                pass
+        names = {r["room_id"]: r["name"] for r in (_quick("GET", "/api/rooms", {"as": session}) or [])}
+        lines = [line_for(e, names) for e in got["events"]]
         sys.stderr.write("\n".join(lines) + "\n")
         sys.stderr.flush()
         sys.exit(2)
@@ -280,6 +360,9 @@ def main(argv=None):
     s = sub.add_parser("register"); s.add_argument("--kind", default=""); s.add_argument("--name", default="")
     s = sub.add_parser("rename"); s.add_argument("target"); s.add_argument("name")
     s = sub.add_parser("create"); s.add_argument("name")
+    s.add_argument("--owner", default=None, help="使用者／維修：指定負責人（名字或 session），自己不進去")
+    s = sub.add_parser("maintainer", help="使用者 指定維修（專門改房間工具的對話）"); s.add_argument("target")
+    sub.add_parser("resume", help="解除暫停（使用者、維修或負責人）")
     s = sub.add_parser("title", help="改房名（負責人或 使用者）"); s.add_argument("room_id"); s.add_argument("name")
     s = sub.add_parser("join"); s.add_argument("room_id"); s.add_argument("--kind", default=""); s.add_argument("--name", default="")
     sub.add_parser("leave")
@@ -333,9 +416,11 @@ def main(argv=None):
     if a.cmd == "register":
         return show(call("POST", "/api/register", session=actor, kind=a.kind, name=a.name))
     if a.cmd == "rename":
-        return show(call("POST", "/api/rename", actor, session=a.target, name=a.name))
+        return show(call("POST", "/api/rename", actor, session=agent_of(a.target), name=a.name))
     if a.cmd == "create":
-        return show(call("POST", "/api/rooms", actor, name=a.name))
+        return show(call("POST", "/api/rooms", actor, name=a.name, owner=agent_of(a.owner) if a.owner else None))
+    if a.cmd == "maintainer":
+        return show(call("POST", "/api/maintainer", actor, session=agent_of(a.target)))
     if a.cmd == "title":
         return show(call("POST", f"/api/rooms/{a.room_id}/name", actor, name=a.name))
     if a.cmd == "join":
@@ -344,9 +429,9 @@ def main(argv=None):
     if a.cmd == "leave":
         return show(call("POST", "/api/move", actor, session=actor, room_id=None))
     if a.cmd == "move":
-        kind = kind_of(a.target)
-        call("POST", "/api/register", session=a.target, kind=kind)
-        return show(call("POST", "/api/move", actor, session=a.target, room_id=None if a.room_id == "none" else a.room_id))
+        target = agent_of(a.target)
+        call("POST", "/api/register", session=target, kind=kind_of(target))
+        return show(call("POST", "/api/move", actor, session=target, room_id=None if a.room_id == "none" else a.room_id))
     if a.cmd == "moves":
         return show(call("GET", "/api/moves", actor, session=actor))
     if a.cmd == "rooms":
@@ -354,16 +439,11 @@ def main(argv=None):
     if a.cmd == "overview":
         return show(call("GET", "/api/overview"))
     if a.cmd == "role":
-        members = call("GET", f"/api/rooms/{current_room(actor, a.room)}", actor)["members"]
-        target = next((m["session"] for m in members if a.target in (m["name"], m["session"])), a.target)
-        return show(call("POST", "/api/role", actor, session=target, role=a.text))
+        return show(call("POST", "/api/role", actor, session=agent_of(a.target), role=a.text))
     if a.cmd == "spawn":
         return spawn(actor, current_room(actor, a.room), a.name, a.role, a.text, a.cwd or os.getcwd(), a.account)
     if a.cmd in ("off", "on"):
-        target = a.target or actor
-        if a.target:
-            members = call("GET", f"/api/rooms/{current_room(actor, a.room)}", actor)["members"]
-            target = next((m["session"] for m in members if a.target in (m["name"], m["session"])), a.target)
+        target = agent_of(a.target) if a.target else actor
         return show(call("POST", "/api/off", actor, session=target, on=a.cmd == "off", reason=getattr(a, "reason", "")))
     if a.cmd == "dnd":
         return show(call("POST", "/api/dnd", actor, session=a.target or actor, on=a.state == "on"))
@@ -396,6 +476,8 @@ def main(argv=None):
                 time.sleep(5)      # 不在房裡就慢慢等，進房後自動接上
 
     room = current_room(actor, a.room)
+    if a.cmd == "resume":
+        return show(call("POST", f"/api/rooms/{room}/resume", actor))
     if a.cmd == "who":
         return show(call("GET", f"/api/rooms/{room}", actor))
     if a.cmd == "read":
