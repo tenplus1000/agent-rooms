@@ -5,7 +5,7 @@ The running desktop already exposes `\\.\pipe\codex-ipc`. It is a framed local I
 ## WSL usage
 
 ```bash
-BRIDGE=/home/<you>/agent-rooms/adapters/codex_desktop/codex-desktop
+BRIDGE=/path/to/agent-rooms/adapters/codex_desktop/codex-desktop
 $BRIDGE thread/owner THREAD_ID
 $BRIDGE thread/settings THREAD_ID
 $BRIDGE thread/state THREAD_ID
@@ -37,12 +37,4 @@ This is an internal, versioned desktop protocol, verified against installed app 
 
 Mutations have no automatic retries. If a timeout/disconnection occurs after submission, check the target transcript before resending. `clientUserMessageId` may be supplied for traceability; do not assume it guarantees deduplication. The active/idle preflight is advisory and may race with a finishing turn; desktop still validates the actual request.
 
-The executable paths in the WSL launcher match 使用者's current machine. It uses Windows Node via WSL interop and converts the adjacent JS file path with `wslpath -w`; no third-party packages are required.
-
-## Verification
-
-- External owner discovery and live snapshot succeeded for chat `00000000-0000-0000-0000-000000000000`.
-- `turn/steer` delivered marker `desktop-bridge-steer-20261023` into its running turn; the model received it as a new message, and IPC returned turn ID `00000000-0000-0000-0000-000000000000`.
-- WSL `turn/steer` also delivered marker `desktop-bridge-wsl-20261023` through the installed Linux launcher into the same running desktop turn.
-- Idle `turn/start` passed on 2026-10-23 at 22:59 Europe/Berlin: after the previous turn finished, the WSL launcher submitted marker `desktop-bridge-start-20261023` and the same desktop chat started turn `00000000-0000-0000-0000-000000000000`. The model received the marker in that new turn. Exit code was 0, with no stderr. The one-shot verifier exited after sending; no monitoring service remains.
-- Machine-readable results are in `verification.json`. No other chat was used or modified for these delivery tests.
+The WSL launcher finds the desktop app's bundled Node under the Windows user profile (override with `CODEX_DESKTOP_NODE`). It uses Windows Node via WSL interop and converts the adjacent JS file path with `wslpath -w`; no third-party packages are required.

@@ -4,14 +4,14 @@
 不需要 pip 套件。核心須先啟動；本程式不會代為啟動核心。
 
 ```bash
-ROOMS_URL=http://127.0.0.1:8775 python3 /home/<you>/agent-rooms/adapters/mcp/server.py
+ROOMS_URL=http://127.0.0.1:8775 python3 /path/to/agent-rooms/adapters/mcp/server.py
 ```
 
 `ROOMS_URL` 未設定時預設 `http://127.0.0.1:8775`。
 stdio 每行一個 UTF-8 JSON-RPC 訊息，stdout 僅輸出協定回應。
 stdin EOF 後程式結束；HTTP 呼叫逾時為 30 秒，不自動重試。
 
-## 註冊方式（由 使用者 自行執行）
+## 註冊方式（由使用者自行執行）
 
 以下只有操作說明，此次實作與驗收沒有執行註冊，也沒有修改任何 Codex／Claude 設定。
 指令格式已對照本機 `claude mcp add --help` 與 `codex mcp add --help`。
@@ -22,7 +22,7 @@ Claude Code（使用者範圍）：
 ```bash
 claude mcp add --transport stdio --scope user \
   --env ROOMS_URL=http://127.0.0.1:8775 \
-  agent-rooms -- python3 /home/<you>/agent-rooms/adapters/mcp/server.py
+  agent-rooms -- python3 /path/to/agent-rooms/adapters/mcp/server.py
 ```
 
 Codex（目前帳號／CODEX_HOME）：
@@ -30,7 +30,7 @@ Codex（目前帳號／CODEX_HOME）：
 ```bash
 codex mcp add agent-rooms \
   --env ROOMS_URL=http://127.0.0.1:8775 \
-  -- python3 /home/<you>/agent-rooms/adapters/mcp/server.py
+  -- python3 /path/to/agent-rooms/adapters/mcp/server.py
 ```
 
 註冊後重新開啟對應客戶端對話即可載入工具。每次呼叫仍須明確提供呼叫者的
@@ -73,7 +73,7 @@ codex mcp add agent-rooms \
 
 需要房間而未給 `room_id` 時，照 `rooms/cli.py` 的 `current_room()`：
 先 `GET /api/rooms?as=<session>`，取第一筆房間；空清單則提示先 join。
-使用者 必須明確給 `room_id`；此情況保留 CLI 的提示原文（其中寫的是 `--room R1`）。
+使用者（`--user` 身分）必須明確給 `room_id`；此情況保留 CLI 的提示原文（其中寫的是 `--room R1`）。
 任務動作與線頭關閉直接使用指定 ID，權限與狀態均交給核心判定。
 
 `room_join` 成功回傳 move 的結果；register 成功而 move 失敗時，
@@ -120,7 +120,7 @@ notifications 不回覆且不執行工具。未知方法、無效 JSON／JSON-RP
 ## 可重跑驗收
 
 ```bash
-cd /home/<you>/agent-rooms
+cd /path/to/agent-rooms
 python3 -B adapters/mcp/test_mcp.py
 ```
 
@@ -137,4 +137,4 @@ python3 -B adapters/mcp/test_mcp.py
 - 自我檢查被核心拒絕，HTTP 與 MCP 訊息逐字相同：`不能檢查自己交的任務`。
 - JSON-RPC 錯誤、notification 無副作用、stdin EOF 正常結束。
 
-完整測試紀錄與 PID／清理結果見同目錄 `verification.json`。
+測試紀錄與 PID／清理結果會寫進暫存資料夾的 `verification.json`。

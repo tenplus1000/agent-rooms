@@ -164,6 +164,8 @@ def main():
         assert len(history) == 1 and history[0] == post
         assert client.tool('room_whiteboard_set', text='白板\nMCP') is None
         assert client.tool('room_whiteboard_get', 'mcp-b', room_id=room_id) == '白板\nMCP'
+        # mcp-b 領任務、交件就算回應了 @，提及的線頭已經自動關掉；再 @ 一次開一條新的來測關閉
+        client.tool('room_say', text='再確認一次 @mcp-b')
         threads = client.tool('room_threads')
         mention = next(item for item in threads if item['kind'] == 'mention')
         assert client.tool('room_thread_close', 'mcp-b', thread_id=mention['id'], note='已處理')['closed']

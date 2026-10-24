@@ -6,7 +6,19 @@ import pathlib
 import subprocess
 import sys
 
-NODE = pathlib.Path('/mnt/c/Users/<you>/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe')
+def _node():
+    """Windows 桌面版 Codex 自帶的 node.exe（CODEX_DESKTOP_NODE 可指定）。"""
+    import os
+    given = os.environ.get('CODEX_DESKTOP_NODE', '').strip()
+    if given:
+        return pathlib.Path(given)
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    from rooms.paths import windows_home
+    home = windows_home() or pathlib.Path.home()
+    return home / '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe'
+
+
+NODE = _node()
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

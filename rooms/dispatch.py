@@ -4,7 +4,7 @@ Claude 不經過這裡：它自己用 Monitor 跑 `room listen`，做事中途�
 
 每個 Codex 一條執行緒：
   1. 對核心長輪詢（只等「該叫醒他」的事件，不推進游標、不算心跳）
-  2. 使用者 三分鐘內在那個對話講過話 → 延後（照助理 wakeup_runner），不算次數
+  2. 使用者 三分鐘內在那個對話講過話 → 延後，不算次數
   3. 找出這個對話在哪：桌面版、或 WSL 的哪個 Codex 帳號
   4. 問狀態：正在跑 → turn/steer；閒著 → turn/start；視窗關了（notLoaded、也沒有程式開著它）→
      標成下線、只留訊息，不替他跑一輪、不花額度。使用者 回到那個對話打字（acc 的 last_seen 更新）
@@ -27,17 +27,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from rooms import paths
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = os.environ.get("ROOMS_URL", "http://127.0.0.1:8775")
-ACC_SESSIONS = os.environ.get("ACC_SESSIONS", "/mnt/c/Users/<you>/.agent-context/goals/sessions")
+ACC_SESSIONS = str(paths.acc_sessions())
 DESKTOP = os.path.join(ROOT, "adapters", "codex_desktop", "codex-desktop")
 CLI = os.path.join(ROOT, "adapters", "codex_cli", "codex-cli")
 # 桌面版的紀錄在 Windows；WSL 的兩個 Codex 帳號共用同一個 sessions（account2 的是捷徑），
 # 所以帳號不能從紀錄放哪判斷，要直接問兩個 daemon。
-DESKTOP_SESSIONS = "/mnt/c/Users/<you>/.codex/sessions"
+DESKTOP_SESSIONS = str(paths.desktop_codex_sessions() or "/nonexistent")
 WSL_SESSIONS = os.path.expanduser("~/.codex/sessions")
 ACCOUNTS = [os.path.expanduser("~/.codex"), os.path.expanduser("~/.codex-work")]
-DASHBOARD = os.path.expanduser("~/quota-helper")      # 借它的 codexquota 查額度（唯讀、不叫模型）
+# 選用：放著 codexquota.py（read(codex_home) → 五小時／一週用量百分比）的資料夾，用來挑還有額度的帳號
+QUOTA_HELPER = os.environ.get("ROOMS_QUOTA_HELPER", "").strip()
 
 USER_IDLE = 180          # 使用者 講完話三分鐘內不插進那個對話
 OWN_ECHO = 20             # 我們自己送進去的那一輪也會觸發 hook、更新 last_seen，這段時間內的不算 使用者
@@ -81,8 +84,10 @@ def _sock(home):
 def _has_quota(home):
     """這個帳號現在還能跑嗎？查不到就當可以（讓 daemon 自己回錯）。"""
     try:
-        if DASHBOARD not in sys.path:
-            sys.path.append(DASHBOARD)
+        if not QUOTA_HELPER:
+            return True
+        if QUOTA_HELPER not in sys.path:
+            sys.path.append(QUOTA_HELPER)
         import codexquota
         info = codexquota.read(home)
     except Exception:

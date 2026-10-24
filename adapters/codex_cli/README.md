@@ -7,7 +7,7 @@
 ## 用法
 
 ```bash
-BRIDGE=/home/<you>/agent-rooms/adapters/codex_cli/codex-cli
+BRIDGE=/path/to/agent-rooms/adapters/codex_cli/codex-cli
 $BRIDGE thread/state THREAD_ID
 $BRIDGE turn/start THREAD_ID --text '閒置時送入的新訊息'
 $BRIDGE turn/steer THREAD_ID --text '執行中補充的訊息'
@@ -95,29 +95,3 @@ OpenAI Docs 的 [app-server 文件](https://learn.chatgpt.com/docs/app-server)
 本機 daemon 的 Unix socket `/rpc` 路徑另依本 repo 實驗與此次實測確認。
 這是版本相關介面，Codex 更新後應重新驗證。
 `codex exec resume` 不用於轉接，因為 daemon 已持有對話 writer。
-
-## 驗證
-
-離線測試完全不連真實 daemon 或對話：
-
-```bash
-python3 -B -m unittest discover -s adapters/codex_cli -p test_cli.py -v
-```
-
-涵蓋 WebSocket 分段、ping/pong、長訊息、RPC 格式、狀態檢查、
-expectedTurnId、禁止設定覆寫，以及送出後逾時／斷線只送一次。
-
-2026-10-24（Europe/Berlin），Codex CLI 0.163.0 實測全部通過：
-
-- 新建 read-only 測試對話 `00000000-0000-0000-0000-000000000000`，
-  工作目錄 `/tmp/rooms-cli-test-20261024-bEDo860G`；只對這個新對話送訊息。
-- 獨立 tmux socket `rooms-cli-test-bEDo860G` 開啟 TUI；
-  `turn/start` 暗號 `cli-start-bEDo860G` 與回覆「收到」均可見。
-- `sleep 25 && echo done` 執行中插入 `藍鯨-bEDo860G`，
-  daemon 回報指令耗時 24,878 ms、exit 0；最終回覆有暗號，TUI 也可見。
-- 執行中 start 與閒置時 steer 均 exit 1，測試紀錄確認兩筆被擋訊息均未出現。
-- 測試 tmux 已關閉；沒有操作其他 tmux session，也沒有停止共享 daemon。
-- 12 項離線測試通過。逾時／斷線不重送以離線故障模擬驗證。
-- TUI 提示更新至 0.164.0，已按 Escape 略過，未安裝更新。
-
-完整回應、turn ID、畫面摘錄與暫存證據路徑見 `verification.json`。

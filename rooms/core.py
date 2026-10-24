@@ -382,7 +382,7 @@ class Core:
             return event
 
     def _open_thread(self, room_id, whose, opener, text, kind, ref=None):
-        # 同一個人、同一種、同一個來源只留一條，新的蓋舊的（another-project 的去重）
+        # 同一個人、同一種、同一個來源只留一條，新的蓋舊的
         for thread in self.state["threads"].values():
             if (thread["room_id"] == room_id and thread["whose"] == whose and thread["kind"] == kind
                     and thread["from"] == opener and not thread.get("closed")
