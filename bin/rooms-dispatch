@@ -5,4 +5,4 @@ HERE=$(dirname "$(readlink -f "$0")")
 if [ -f "$HERE/../local.env" ]; then
     set -a; . "$HERE/../local.env"; set +a
 fi
-PYTHONPATH="$HERE/.." exec python3 -m rooms.dispatch "$@"
+PYTHONPATH="$HERE/.." exec python3 -P -m rooms.dispatch "$@"
