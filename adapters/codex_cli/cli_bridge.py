@@ -285,8 +285,8 @@ def execute(request):
             outgoing['clientUserMessageId'] = params['clientUserMessageId']
         if 'sandbox' in params:
             # Threads opened before thread/start set a sandbox were read-only; this turn
-            # and the ones after it get workspace-write.
-            outgoing['sandboxPolicy'] = {'type': 'workspaceWrite'}
+            # and the ones after it get workspace-write, with network like a trusted window.
+            outgoing['sandboxPolicy'] = {'type': 'workspaceWrite', 'networkAccess': True}
         if method == 'turn/steer':
             outgoing['expectedTurnId'] = current['activeTurnId']
         return ws.call(method, outgoing, mutation=True)
