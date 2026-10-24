@@ -1,6 +1,6 @@
 """轉送程式：替房裡的 Codex 監聽，該叫醒時用轉接器送進它的對話。跑在本機，不進 container。
 
-Claude 不經過這裡：它自己用 Monitor 跑 `room listen`，做事中途由 PostToolUse hook 補送。
+Claude 不經過這裡：每一輪結束時 Stop hook 在背景等房間、有人找就叫醒它，做事中途由 PostToolUse hook 補送。
 
 每個 Codex 一條執行緒：
   1. 對核心長輪詢（只等「該叫醒他」的事件，不推進游標、不算心跳）
