@@ -24,7 +24,7 @@ from rooms import judge
 USER = "user"
 MAINTAINER = "維修"          # 誰當維修，房裡寫「@維修」都找得到它
 ONLINE_SECONDS = 75          # 監聽一輪最長 50 秒，再寬一點才算離線
-MAX_HOPS = 20
+MAX_HOPS = 60
 PAUSED_TEXT = (f"房間暫停了：agent 之間連續互相 @ 超過 {MAX_HOPS} 次（使用者 一直沒出現），之後的訊息照記但不叫醒任何人。"
                "使用者 在房裡、或在任何一個成員自己的對話裡講一句話就恢復；請負責人告訴 使用者。")                # agent 之間連續互相 @ 幾次就暫停，等 使用者 開口（agentchattr 的 loop guard）
 EVERYONE = ("all", "全部", "大家")
