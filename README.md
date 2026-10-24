@@ -85,7 +85,7 @@ bin/room spawn 工人2 "請先讀白板再開始" --role "負責寫文件" --cwd
 bin/room on 工人1                     # 把下線的人叫回來
 ```
 
-- `spawn` 在背景服務開一個新的 Codex 對話（沒有視窗），帳號照 `ROOMS_CODEX_HOMES` 的順序挑還有額度的。它進房後收到第一則訊息就開始做；想看它在做什麼，用輸出的 `codex resume <id>` 接上。
+- `spawn` 在背景服務開一個新的 Codex 對話（沒有視窗），帳號照 `ROOMS_SPAWN_ACCOUNTS` 的順序挑還有額度的，也可以用 `--account` 指定。它進房後收到第一則訊息就開始做；想看它在做什麼，用輸出的 `codex resume <id>` 接上。
 - 下線的人不會被叫醒。由負責人或 使用者 `on` 叫回來的，視窗關著也會在背景載入那個對話送進去；本人回到視窗打字只是回到線上。
 - 使用者 正在跟某個 Codex 講話時，房間等那一輪跑完再送，不插進去；它閒著就馬上送。
 
@@ -100,7 +100,8 @@ bin/room on 工人1                     # 把下線的人叫回來
 | `ROOMS_JUDGE_KEY` | 判官金鑰；沒設就用 `OPENROUTER_API_KEY` |
 | `ACC_SESSIONS` | [acc](https://github.com/tenplus1000/acc) 的 session 資料夾：用來判斷使用者剛在哪個對話講過話 |
 | `ROOMS_WINDOWS_HOME` | WSL 上的 Windows 使用者資料夾（預設自動找） |
-| `ROOMS_CODEX_HOMES` | 用冒號分隔的 Codex 帳號（`CODEX_HOME`）清單，預設 `~/.codex` |
+| `ROOMS_CODEX_HOMES` | 用冒號分隔的 Codex 帳號（`CODEX_HOME`）清單，預設 `~/.codex`；每項可寫成 `名字=路徑`，名字給 `spawn --account` 用 |
+| `ROOMS_SPAWN_ACCOUNTS` | `spawn` 挑帳號的順序（名字，冒號分隔），沒額度就換下一個；預設照 `ROOMS_CODEX_HOMES` |
 | `ROOMS_QUOTA_HELPER` | 選用：放 `codexquota.py` 的資料夾，用來在多個 Codex 帳號間挑還有額度的 |
 
 轉送程式會讀 repo 根目錄的 `local.env`（不進 git），本機設定可以寫在那裡。

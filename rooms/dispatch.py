@@ -39,9 +39,17 @@ CLI = os.path.join(ROOT, "adapters", "codex_cli", "codex-cli")
 # sessions 資料夾，所以帳號不能從紀錄放哪判斷，要直接問每個帳號的 daemon。
 DESKTOP_SESSIONS = str(paths.desktop_codex_sessions() or "/nonexistent")
 WSL_SESSIONS = os.path.expanduser("~/.codex/sessions")
-# ROOMS_CODEX_HOMES：用冒號分隔的 CODEX_HOME 清單（第一個優先）；沒設就只有 ~/.codex
-ACCOUNTS = [os.path.expanduser(h) for h in
-            (os.environ.get("ROOMS_CODEX_HOMES", "").strip() or "~/.codex").split(":") if h.strip()]
+# ROOMS_CODEX_HOMES：用冒號分隔的 CODEX_HOME 清單（第一個優先）；每一項可以寫成「名字=路徑」，
+# 名字給 `room spawn --account` 用，沒寫就是資料夾名稱。沒設就只有 ~/.codex
+NAMES = {}
+for _entry in (os.environ.get("ROOMS_CODEX_HOMES", "").strip() or "~/.codex").split(":"):
+    if _entry.strip():
+        _name, _, _path = _entry.strip().rpartition("=")
+        _path = os.path.expanduser(_path)
+        NAMES[_path] = _name or os.path.basename(_path)
+ACCOUNTS = list(NAMES)
+# ROOMS_SPAWN_ACCOUNTS：`room spawn` 開新對話時挑帳號的順序（用名字，冒號分隔）；沒設就照 ACCOUNTS
+SPAWN_ORDER = [n for n in os.environ.get("ROOMS_SPAWN_ACCOUNTS", "").split(":") if n.strip()]
 # 選用：放著 codexquota.py（read(codex_home) → 五小時／一週用量百分比）的資料夾，用來挑還有額度的帳號
 QUOTA_HELPER = os.environ.get("ROOMS_QUOTA_HELPER", "").strip()
 
@@ -112,30 +120,42 @@ def locate(thread_id):
     for home in ACCOUNTS:
         state, error = adapter("cli", _sock(home), {"method": "thread/state", "params": {"threadId": thread_id}})
         if not error and (state.get("threadRuntimeStatus") or {}).get("type") in ("idle", "active"):
-            return "cli", _sock(home), f"{os.path.basename(home)}（對話掛在這個帳號）"
+            return "cli", _sock(home), f"{account_name(home)}（對話掛在這個帳號）"
     if not _found(WSL_SESSIONS, thread_id):
         return None
     for home in ACCOUNTS:
         if _has_quota(home):
-            return "cli", _sock(home), f"{os.path.basename(home)}（還有額度）"
+            return "cli", _sock(home), f"{account_name(home)}（還有額度）"
     return "cli", None, "兩個 Codex 帳號的額度都用完了"
 
 
-def spawn(cwd):
-    """在背景服務開一個新的 Codex 對話（沒有視窗）。帳號照順序挑還有額度的。
+def account_name(home):
+    return NAMES.get(home, os.path.basename(home))
 
+
+def spawn(cwd, account=None):
+    """在背景服務開一個新的 Codex 對話（沒有視窗）。
+
+    account 指定帳號（名字）就只用那個；沒指定就照 ROOMS_SPAWN_ACCOUNTS 的順序挑還有額度的。
     回 (thread id, 帳號資料夾)；開不成丟 RuntimeError。模型、權限照那個帳號的設定，
     只有核准改成 never：沒有視窗就沒人能按核准，要核准的指令直接失敗、不會卡住。
     """
-    homes = [h for h in ACCOUNTS if _has_quota(h)]
-    if not homes:
-        raise RuntimeError("Codex 帳號的額度都用完了")
+    by_name = {account_name(h): h for h in ACCOUNTS}
+    if account:
+        if account not in by_name:
+            raise RuntimeError(f"沒有這個 Codex 帳號：{account}（有：{'、'.join(by_name)}）")
+        homes = [by_name[account]]
+    else:
+        order = [by_name[n] for n in SPAWN_ORDER if n in by_name]
+        homes = [h for h in order + [h for h in ACCOUNTS if h not in order] if _has_quota(h)]
+        if not homes:
+            raise RuntimeError("Codex 帳號的額度都用完了")
     errors = []
     for home in homes:
         got, error = adapter("cli", _sock(home), {"method": "thread/start", "params": {"cwd": cwd}})
         if not error:
             return got["threadId"], home
-        errors.append(f"{os.path.basename(home)}：{error}")
+        errors.append(f"{account_name(home)}：{error}")
     raise RuntimeError("開不了新的 Codex 對話：" + "；".join(errors))
 
 
