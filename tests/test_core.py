@@ -26,6 +26,14 @@ class CoreTest(unittest.TestCase):
 
     # ── 房間、移動、知識邊界 ─────────────────────────────
 
+    def test_owner_or_user_renames_room(self):
+        self.assertEqual(self.core.rename_room("s-claude", self.room, " 桌遊社 ")["name"], "桌遊社")
+        self.assertEqual(self.core.rename_room(USER, self.room, "素材包")["name"], "素材包")
+        with self.assertRaises(RoomError):
+            self.core.rename_room("s-cx1", self.room, "搶房")
+        with self.assertRaises(RoomError):
+            self.core.rename_room("s-claude", self.room, " ")
+
     def test_one_room_at_a_time_and_moves_are_recorded(self):
         other = self.core.create_room(USER, "讀文件")["room_id"]
         self.core.move(USER, "s-cx1", self.room)

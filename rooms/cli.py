@@ -84,6 +84,8 @@ def line_for(event, room_name):
         return head + event["text"]
     if kind == "room_created":
         return head + f"開了這間房：{event['name']}"
+    if kind == "room_renamed":
+        return head + f"把房名改成：{event['name']}"
     return head + json.dumps(event, ensure_ascii=False)
 
 
@@ -278,6 +280,7 @@ def main(argv=None):
     s = sub.add_parser("register"); s.add_argument("--kind", default=""); s.add_argument("--name", default="")
     s = sub.add_parser("rename"); s.add_argument("target"); s.add_argument("name")
     s = sub.add_parser("create"); s.add_argument("name")
+    s = sub.add_parser("title", help="改房名（負責人或 使用者）"); s.add_argument("room_id"); s.add_argument("name")
     s = sub.add_parser("join"); s.add_argument("room_id"); s.add_argument("--kind", default=""); s.add_argument("--name", default="")
     sub.add_parser("leave")
     s = sub.add_parser("move", help="使用者 把某個點移進房間（room 填 none 就是移出）"); s.add_argument("target"); s.add_argument("room_id")
@@ -333,6 +336,8 @@ def main(argv=None):
         return show(call("POST", "/api/rename", actor, session=a.target, name=a.name))
     if a.cmd == "create":
         return show(call("POST", "/api/rooms", actor, name=a.name))
+    if a.cmd == "title":
+        return show(call("POST", f"/api/rooms/{a.room_id}/name", actor, name=a.name))
     if a.cmd == "join":
         call("POST", "/api/register", session=actor, kind=a.kind or kind_of(actor), name=a.name)
         return show(call("POST", "/api/move", actor, session=actor, room_id=a.room_id))

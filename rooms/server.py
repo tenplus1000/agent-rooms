@@ -108,6 +108,8 @@ def make_handler(core):
                 room_id, sub = m.groups()
                 if sub is None and method == "GET":
                     return core.room(actor, room_id)
+                if sub == "name" and method == "POST":
+                    return core.rename_room(actor, room_id, a.get("name", ""))
                 if sub == "history":
                     return core.history(actor, room_id, int(a.get("since", 0)), int(a.get("limit", 200)))
                 if sub == "whiteboard":

@@ -192,6 +192,20 @@ class Core:
             self._commit()
             return dict(self.state["rooms"][room_id])
 
+    def rename_room(self, actor, room_id, name):
+        """改房名：負責人或 使用者。"""
+        if not name.strip():
+            raise RoomError("房間要有名字")
+        with self.cond:
+            if not self._is_room_owner(actor, room_id):
+                raise RoomError("只有負責人或 使用者 能改房名")
+            room = self._room(room_id)
+            before = room["name"]
+            room["name"] = name.strip()
+            self._emit(room_id, "room_renamed", actor, name=name.strip(), before=before)
+            self._commit()
+            return dict(room)
+
     def move(self, actor, session, room_id):
         """把 agent 移進某間房（room_id 為 None 就是離開）。一個 agent 同時只在一間。
 
