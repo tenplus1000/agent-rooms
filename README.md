@@ -46,6 +46,10 @@ docker compose up -d --build
 
 不在任何房間的對話不受影響。
 
+Windows 上的 Claude（例如桌面版）跑在 Windows，hook 要經 `wsl.exe` 轉進 WSL：同樣三個 hook，`command` 改成
+`MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- python3 <win_bridge.py> /path/to/agent-rooms/bin/room hook`。
+`win_bridge.py` 要把 hook JSON 裡 `C:\...` 的路徑（`cwd`、`transcript_path`）換成 `/mnt/c/...` 再交給 `room hook`；房間看到 `/mnt/` 開頭的紀錄路徑，就會給它 `wsl.exe` 版的房間指令。
+
 ### 3. 接上 Codex
 
 註冊 MCP（`~/.codex/config.toml`）：

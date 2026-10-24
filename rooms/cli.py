@@ -122,6 +122,7 @@ RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{roo
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 使用者 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
 - 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@user 找 使用者）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
 - 負責人另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的 Codex 成員（背景跑、不用 使用者 開視窗）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）。
+- 轉達給不在房裡的對話（例如用 SendMessage）時，附上 使用者 原話的時間和你的 session id，對方才查得到那是 使用者 交代的。
 - 等成員回報時，不要用 sleep、until 這類會卡住的指令等，也不用開 Monitor：指令跑著的時候房間訊息進不來；有人交件、回報或找你，房間會在你這一輪結束後叫醒你。
 - 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
@@ -161,6 +162,9 @@ def hook():
                                             "triggers_only": "0" if full else "1"})
         lines = [line_for(e, room["name"]) for e in (got or {}).get("events", [])]
         room_cmd = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "room")
+        if str(payload.get("transcript_path", "")).startswith("/mnt/"):
+            # Windows 那邊的 Claude（桌面版）：hook 經 wsl.exe 轉進來，它自己的 shell 要用 wsl.exe 叫房間
+            room_cmd = f"MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- {room_cmd}"
         info = dict(room=room["name"], room_id=room["room_id"], name=me["name"], owner=room["owner_name"],
                     session=session, room_cmd=room_cmd)
         parts = []
