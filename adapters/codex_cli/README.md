@@ -82,8 +82,7 @@ CLI 沒有指定 request ID 時回傳 `"id":null`。
 
 ## 協定依據
 
-以本機 `codex-cli 0.163.0` 產生的 schema、
-`notes/experiments/cx_ws.py`、`notes/experiments/cx_steer.py` 為實作依據。
+以本機 `codex-cli 0.163.0` 產生的 schema 為實作依據。
 可用下列指令在暫存目錄重新取得 schema：
 
 ```bash
