@@ -73,6 +73,8 @@ def line_for(event, room_name):
         return head + "離開房間"
     if kind == "whiteboard":
         return head + "改了白板（room board 看內容）"
+    if kind == "delivery":
+        return head + f"〔送不到 {event['from_name']}〕{event['detail']}"
     if kind == "room_created":
         return head + f"開了這間房：{event['name']}"
     return head + json.dumps(event, ensure_ascii=False)
@@ -119,7 +121,6 @@ CODEX_RULES = """你現在在 使用者 的房間工具裡：房間「{room}」�
 - 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@user 找 使用者）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。
 - 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
-LISTEN_HINT = "你還沒有在監聽這間房。請用 Monitor 執行 `{room_cmd} listen --session {session}`（逾時設最長，到期就重開），房裡有人找你時才會叫醒你。"
 
 
 def hook():
@@ -130,6 +131,8 @@ def hook():
         event_name = payload.get("hook_event_name", "UserPromptSubmit")
         if not session:
             return
+        if event_name == "Stop":
+            return rewake(session)
         rooms = _quick("GET", "/api/rooms", {"as": session})
         if not rooms:
             return
@@ -139,7 +142,7 @@ def hook():
             return
         full = event_name == "UserPromptSubmit"
         # 使用者開口那一輪：把累積的都補上；做事中途：只有該叫醒他時才插話
-        got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "0",
+        got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "1",
                                             "triggers_only": "0" if full else "1"})
         lines = [line_for(e, room["name"]) for e in (got or {}).get("events", [])]
         room_cmd = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "room")
@@ -148,8 +151,6 @@ def hook():
         parts = []
         if full:
             parts.append((CODEX_RULES if me["kind"] == "codex" else RULES).format(**info))
-            if me["kind"] == "claude" and not me["online"]:
-                parts.append(LISTEN_HINT.format(**info))
         if lines:
             parts.append("房間的新訊息：\n" + "\n".join(lines))
         if not parts or (not full and not lines):
@@ -158,6 +159,48 @@ def hook():
                                                  "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False))
     except Exception:
         return
+
+
+def rewake(session):
+    """Stop hook（asyncRewake）：這一輪做完就在背景等房間，有人找他時 exit 2 把他叫醒。
+
+    閒著的 Claude 沒有別的入口叫得醒；Monitor 要它自己先開，所以改成每輪結束都自動接上。
+    同一個對話只留最新的一個等待者（新的一輪結束會換掉舊的）。不在房裡就慢慢等，進房後自動接上。
+    """
+    import tempfile
+    mark = os.path.join(tempfile.gettempdir(), f"agent-rooms-wait-{session}")
+    me = str(os.getpid())
+    with open(mark, "w") as fh:
+        fh.write(me)
+    def mine():
+        try:
+            with open(mark) as fh:
+                return fh.read().strip() == me
+        except OSError:
+            return False
+
+    while mine():
+        try:
+            # 先不推進游標：等確定自己還是最新的等待者才 ack，舊的等待者不會把訊息吃掉
+            got = call("GET", "/api/listen", session=session, wait=50, triggers_only="1", consume="0")
+        except (CoreDown, SystemExit):
+            time.sleep(20)                  # 核心沒開，或這個對話還沒進過房間
+            continue
+        if not got["events"]:
+            if not got["room_id"]:
+                time.sleep(10)
+            continue
+        if not mine():
+            return                          # 已經有新的等待者接手
+        try:
+            call("POST", "/api/ack", session=session, room_id=got["room_id"], seq=got["events"][-1]["seq"])
+        except (CoreDown, SystemExit):
+            pass
+        name = _quick("GET", f"/api/rooms/{got['room_id']}", {"as": session}) or {}
+        lines = [line_for(e, name.get("name", got["room_id"])) for e in got["events"]]
+        sys.stderr.write("\n".join(lines) + "\n")
+        sys.stderr.flush()
+        sys.exit(2)
 
 
 def _quick(method, path, params):

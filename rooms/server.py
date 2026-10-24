@@ -90,7 +90,7 @@ def make_handler(core):
                 return core.touch(a["session"])
             if method == "POST" and path == "/api/delivery":
                 return core.record_delivery(a["session"], a["action"], a.get("detail", ""),
-                                            a.get("light") in (True, "1", "true", 1))
+                                            a.get("light") in (True, "1", "true", 1), a.get("notify") or ())
             if method == "GET" and path == "/api/deliveries":
                 return core.deliveries(int(a.get("limit", 200)))
             if path == "/api/rooms":

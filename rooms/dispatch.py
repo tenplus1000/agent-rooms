@@ -40,7 +40,8 @@ USER_IDLE = 180          # 使用者 講完話三分鐘內不插進那個對話
 OWN_ECHO = 20             # 我們自己送進去的那一輪也會觸發 hook、更新 last_seen，這段時間內的不算 使用者
 AFTER_CHECK = 8           # 送出後幾秒回頭確認那一輪有沒有跑起來
 CAP_PER_HOUR = 30         # 每個 agent 每小時最多被房間叫醒幾次
-BACKOFF = {"unavailable": 600, "desktop_closed": 300, "race": 3, "error": 60}
+BACKOFF = {"unavailable": 600, "desktop_closed": 300, "race": 3, "error": 60, "detached": 60}
+DETACHED = "already has an active writer"   # 視窗自己握著對話、沒接背景服務：daemon 確定沒收下
 
 
 def call(method, path, **params):
@@ -154,13 +155,28 @@ class Worker(threading.Thread):
         self.sent = []            # 最近一小時送出的時間
         self.last_sent = 0
         self.stop = False
+        self.reported = None      # 這一批送不到已經通知過了（重試時不再洗版）
 
-    def note(self, action, detail, light=False):
+    def note(self, action, detail, light=False, notify=()):
         log(self.session[:8], action, detail)
         try:
-            call("POST", "/api/delivery", session=self.session, action=action, detail=detail, light=light)
+            call("POST", "/api/delivery", session=self.session, action=action, detail=detail, light=light,
+                 notify=list(notify))
         except Exception as error:
             log("記錄失敗", error)
+
+    def fail(self, action, detail, events):
+        """送不到：亮燈，並在房裡告訴找他的人。同一批只通知一次，之後重試只記紀錄。"""
+        key = (action, events[-1]["seq"])
+        if self.reported == key:
+            log(self.session[:8], action, "（已通知過）", detail)
+            return
+        self.reported = key
+        senders = []
+        for e in events:
+            if self.session in e.get("wake", ()) and e["from"] not in senders:
+                senders.append(e["from"])
+        self.note(action, detail, light=True, notify=senders)
 
     def run(self):
         held = None
@@ -194,18 +210,18 @@ class Worker(threading.Thread):
     def deliver(self, room_id, events):
         where = locate(self.session)
         if where is None:
-            self.note("not_found", "找不到這個 Codex 對話的紀錄（不是 Codex，或還沒開始過）", light=True)
+            self.fail("not_found", "找不到這個 Codex 對話的紀錄（不是 Codex，或還沒開始過）", events)
             time.sleep(BACKOFF["unavailable"])
             return
         kind, sock, why = where
         if kind == "cli" and sock is None:
-            self.note("unavailable", why, light=True)
+            self.fail("unavailable", why + "；訊息留著，之後會再試", events)
             time.sleep(BACKOFF["unavailable"])
             return
         state, error = adapter(kind, sock, {"method": "thread/state", "params": {"threadId": self.session}})
         if error:
             reason = "desktop_closed" if kind == "desktop" else "unavailable"
-            self.note(reason, f"問不到對話狀態：{error}", light=True)
+            self.fail(reason, f"問不到對話狀態：{error}；訊息留著，之後會再試", events)
             time.sleep(BACKOFF[reason])
             return
         call("POST", "/api/touch", session=self.session)
@@ -215,7 +231,7 @@ class Worker(threading.Thread):
         elif status in ("idle", "notLoaded"):
             method = "turn/start"
         else:
-            self.note("unavailable", f"對話狀態是 {status}（可能是額度用完），先不送", light=True)
+            self.fail("unavailable", f"對話狀態是 {status}（可能是額度用完），訊息留著，之後會再試", events)
             time.sleep(BACKOFF["unavailable"])
             return
         room = call("GET", f"/api/rooms/{room_id}", **{"as": self.session})
@@ -226,20 +242,26 @@ class Worker(threading.Thread):
             log(self.session[:8], "狀態剛好變了，重試", error)
             time.sleep(BACKOFF["race"])
             return
+        if error and DETACHED in error:
+            self.fail("detached", "那個 Codex 視窗沒接上房間（帶了 -c 參數開的視窗會自己獨立跑），訊息留著；"
+                      f"使用者 關掉那個視窗、用 `codex-work resume {self.session}`（或 `codex resume`）重開後會自動補送", events)
+            time.sleep(BACKOFF["detached"])
+            return
         # 送出去了，或結果不確定：都推進游標，不自動重送
         call("POST", "/api/ack", session=self.session, room_id=room_id, seq=events[-1]["seq"])
         self.last_sent = time.time()
         self.sent.append(self.last_sent)
         if error:
-            self.note("uncertain", f"{method} 送出後結果不確定，請查那個對話的紀錄：{error}", light=True)
+            self.fail("uncertain", f"{method} 送出後結果不確定（不會自動重送），請看那個對話有沒有收到：{error}", events)
             return
+        self.reported = None
         self.note(method.split("/")[1], f"{why} 送了 {len(events)} 則（到 #{events[-1]['seq']}）")
         # 送進去不等於跑得起來（例如額度用完會在幾秒內失敗）：回頭看一眼
         time.sleep(AFTER_CHECK)
         after, error = adapter(kind, sock, {"method": "thread/state", "params": {"threadId": self.session}})
         status = None if error else (after.get("threadRuntimeStatus") or {}).get("type")
         if status == "systemError":
-            self.note("failed_after", "訊息送進去了，但那一輪沒跑起來（對話變成錯誤狀態，常見是額度用完）", light=True)
+            self.fail("failed_after", "訊息送進去了，但那一輪沒跑起來（對話變成錯誤狀態，常見是額度用完）", events)
 
 
 def main():

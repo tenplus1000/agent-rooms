@@ -21,7 +21,7 @@ from pathlib import Path
 
 USER = "user"
 ONLINE_SECONDS = 75          # 監聽一輪最長 50 秒，再寬一點才算離線
-MAX_HOPS = 6                 # agent 之間連續互相 @ 幾次就暫停，等 使用者 開口（agentchattr 的 loop guard）
+MAX_HOPS = 20                # agent 之間連續互相 @ 幾次就暫停，等 使用者 開口（agentchattr 的 loop guard）
 EVERYONE = ("all", "全部", "大家")
 MENTION = re.compile(r"@([\w\-\.㐀-鿿]+)")
 
@@ -307,7 +307,9 @@ class Core:
                 room["paused"] = False
                 if not mentions and not everyone and room["owner"] in members:
                     wake.append(room["owner"])       # 使用者 沒點名就是對負責人說
-            elif wake:
+            elif not mentions and not everyone and room["owner"] in members:
+                wake.append(room["owner"])           # 成員沒點名（回報、完成）也是對負責人說，不然負責人看不到
+            if actor != USER and wake:
                 room["hops"] = room.get("hops", 0) + 1
                 if room["hops"] > MAX_HOPS and not room.get("paused"):
                     room["paused"] = True
@@ -316,11 +318,14 @@ class Core:
                                       "paused")
                 if room.get("paused"):
                     wake = []                       # 暫停中：訊息照記，不叫醒人
-            event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake,
-                               held=bool(room.get("paused")) and actor != USER)
+            held = bool(room.get("paused")) and actor != USER
+            event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake, held=held)
             for target in mentions:
                 self._open_thread(room_id, target, actor, text, "mention", ref=event["seq"])
             self._commit()
+            if held:
+                # 發話的人要知道：訊息記下了，但沒有人被叫醒
+                return dict(event, notice="房間暫停中：這則已記下，但沒有叫醒任何人；使用者 在房裡講一句話才恢復。")
             return event
 
     def _open_thread(self, room_id, whose, opener, text, kind, ref=None):
@@ -436,8 +441,12 @@ class Core:
             self._save()
             return agent["cursor"][room_id]
 
-    def record_delivery(self, session, action, detail="", light=False):
-        """每一次叫醒、插話、延後、擋下都記一筆；light=True 時在他所在的房間亮燈。"""
+    def record_delivery(self, session, action, detail="", light=False, notify=()):
+        """每一次叫醒、插話、延後、擋下都記一筆；light=True 時在他所在的房間亮燈。
+
+        notify：送不到時要讓誰知道（通常是找他的人）。會在房裡留一則「送不到」並叫醒這些人，
+        不然找人的那一方只會以為對方沒回。
+        """
         with self.cond:
             agent = self._agent(session)
             row = {"at": _now(), "session": session, "name": agent["name"], "room_id": agent.get("room_id"),
@@ -448,6 +457,10 @@ class Core:
             if light and agent.get("room_id"):
                 self._open_thread(agent["room_id"], USER, session, f"{agent['name']}：{detail}", "delivery",
                                   ref=action)
+            if notify and agent.get("room_id"):
+                members = self._members(agent["room_id"])
+                wake = [m for m in notify if m in members and m != session]
+                self._emit(agent["room_id"], "delivery", session, action=action, detail=detail, wake=wake)
             self._commit()
             return row
 

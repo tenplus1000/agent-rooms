@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -33,6 +34,11 @@ class WakeTest(unittest.TestCase):
         self.assertEqual(self.wake_of(self.core.post("s-boss", self.room, "@a 看白板")), ["s-a"])
         self.assertEqual(self.wake_of(self.core.post("s-boss", self.room, "隨口說說")), [])
         self.assertEqual(self.wake_of(self.core.post("s-boss", self.room, "@all 集合")), ["s-a", "s-b"])
+
+    def test_member_without_mention_reports_to_the_owner(self):
+        self.assertEqual(self.wake_of(self.core.post("s-a", self.room, "我做完了")), ["s-boss"])
+        self.assertEqual(self.wake_of(self.core.post("s-a", self.room, "@b 我做完了")), ["s-b"])
+        self.assertEqual(self.core.post("s-boss", self.room, "大家辛苦")["wake"], [])   # 負責人自己沒點名就是背景
 
     def test_user_without_mention_talks_to_the_owner(self):
         self.assertEqual(self.wake_of(self.core.post(USER, self.room, "這個怎麼樣")), ["s-boss"])
@@ -84,6 +90,7 @@ class WakeTest(unittest.TestCase):
         held = self.core.post("s-a", self.room, "@b 再換你")
         self.assertEqual(held["wake"], [])
         self.assertTrue(held["held"])
+        self.assertIn("暫停", held["notice"])                           # 發話的人知道被擋了
         self.assertEqual(self.core.room(USER, self.room)["lit"], 1)
         self.core.post(USER, self.room, "好了，b 繼續")
         self.assertEqual(self.core.post("s-a", self.room, "@b 繼續")["wake"], ["s-b"])
@@ -134,19 +141,43 @@ class LiveServer(unittest.TestCase):
 
 
 class HookTest(LiveServer):
-    def test_user_prompt_gets_rules_listen_hint_and_backlog(self):
-        self.core.state["agents"]["s-claude"]["listening_at"] = 0       # 沒有 Monitor 在聽
+    def test_user_prompt_gets_rules_and_backlog(self):
         self.core.post(USER, self.room, "背景")
         context = self.run_hook("s-claude", "UserPromptSubmit")
         self.assertIn("你在房裡叫「主持」", context)
-        self.assertIn("listen --session s-claude", context)
         self.assertIn("【房間 房（R1）｜來自 使用者】背景", context)
         again = self.run_hook("s-claude", "UserPromptSubmit")
         self.assertNotIn("房間的新訊息", again)                          # 補過的不再補
-        self.assertIn("listen --session s-claude", again)               # hook 本身不算心跳
+
+    def test_stop_hook_waits_and_wakes_on_mention(self):
+        self.core.post(USER, self.room, "@工人 只是背景")                 # 沒找主持，不叫醒
+        self.core.post("s-cx", self.room, "@主持 有問題")
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err), self.assertRaises(SystemExit) as ctx:
+            cli.rewake("s-claude")
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("@主持 有問題", err.getvalue())
+        self.assertIsNone(self.run_hook("s-claude", "PostToolUse"))      # 已經送過，不重送
+
+    def test_replaced_waiter_leaves_messages_for_the_new_one(self):
+        import tempfile as tf
+        mark = os.path.join(tf.gettempdir(), "agent-rooms-wait-s-claude")
+        self.core.post("s-cx", self.room, "@主持 有問題")
+        real_call = cli.call
+
+        def call(method, path, *a, **k):
+            result = real_call(method, path, *a, **k)
+            if path == "/api/listen":
+                with open(mark, "w") as fh:
+                    fh.write("someone-newer")                           # 等的時候有新的等待者接手
+            return result
+        with mock.patch.object(cli, "call", call):
+            self.assertIsNone(cli.rewake("s-claude"))
+        left = self.core.listen("s-claude", wait=0, triggers_only=True)["events"]
+        self.assertIn("@主持 有問題", [e.get("text") for e in left])        # 舊的沒把訊息吃掉
 
     def test_post_tool_use_only_interrupts_for_triggers(self):
-        self.core.post("s-cx", self.room, "只是背景")
+        self.core.post(USER, self.room, "@工人 只是背景")                 # 找的是別人，對主持是背景
         self.assertIsNone(self.run_hook("s-claude", "PostToolUse"))
         self.core.post("s-cx", self.room, "@主持 請檢查")
         context = self.run_hook("s-claude", "PostToolUse")
@@ -233,6 +264,22 @@ class DispatchTest(LiveServer):
         self.assertEqual(self.pending()["events"], [])
         self.assertEqual(self.core.deliveries()[-1]["action"], "uncertain")
         self.assertEqual(self.core.room(USER, self.room)["lit"], 1)
+
+    def test_detached_window_is_kept_and_told_once(self):
+        self.core.post("s-claude", self.room, "@工人 做 T1")
+        err = "thread s-cx already has an active writer"
+        worker = self.worker()
+        adapter, _ = self.fake_adapter("notLoaded", err)
+        with mock.patch.object(dispatch, "locate", return_value=("cli", "/sock", "測試帳號")), \
+                mock.patch.object(dispatch, "adapter", adapter), mock.patch.object(dispatch.time, "sleep"):
+            for _ in range(2):
+                got = self.pending()
+                worker.deliver(got["room_id"], got["events"])
+        self.assertEqual(len(self.pending()["events"]), 1)            # 沒收下就不 ack
+        notices = [e for e in self.core.history(USER, self.room) if e["type"] == "delivery"]
+        self.assertEqual(len(notices), 1)                              # 重試不洗版
+        self.assertEqual(notices[0]["wake"], ["s-claude"])             # 叫醒找他的人
+        self.assertIn("codex-work resume", notices[0]["detail"])
 
     def test_unknown_thread_is_reported(self):
         self.core.post("s-claude", self.room, "@工人 做 T1")
