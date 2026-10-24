@@ -6,7 +6,10 @@ Claude 不經過這裡：它自己用 Monitor 跑 `room listen`，做事中途�
   1. 對核心長輪詢（只等「該叫醒他」的事件，不推進游標、不算心跳）
   2. 使用者 三分鐘內在那個對話講過話 → 延後（照助理 wakeup_runner），不算次數
   3. 找出這個對話在哪：桌面版、或 WSL 的哪個 Codex 帳號
-  4. 問狀態：正在跑 → turn/steer；閒著 → turn/start；其他（額度用完、桌面版沒開）→ 記錄、亮燈、過一陣子再試
+  4. 問狀態：正在跑 → turn/steer；閒著 → turn/start；視窗關了（notLoaded、也沒有程式開著它）→
+     標成下線、只留訊息，不替他跑一輪、不花額度。使用者 回到那個對話打字（acc 的 last_seen 更新）
+     就標回線上，留著的一起補送。做完的成員由負責人用 `room off` 標下線，效果一樣；
+     其他（額度用完、桌面版沒開）→ 記錄、亮燈、過一陣子再試
   5. 送成功才 ack；送出後結果不確定 → 也 ack（不自動重送），記錄並亮燈，請 使用者 查紀錄
 
 每一次叫醒、插話、延後、擋下都寫進核心的 deliveries.jsonl。
@@ -109,6 +112,20 @@ def locate(thread_id):
     return "cli", None, "兩個 Codex 帳號的額度都用完了"
 
 
+def window_open(thread_id):
+    """背景服務沒載入這個對話時，還有沒有程式開著它的紀錄檔（＝沒接上服務、自己獨立跑的視窗）。"""
+    for fd_dir in glob.glob("/proc/[0-9]*/fd"):
+        try:
+            if "app-server-daemon" in os.readlink(os.path.join(os.path.dirname(fd_dir), "exe")):
+                continue                    # 背景服務自己開著的不算視窗
+            for fd in os.listdir(fd_dir):
+                if thread_id in os.readlink(os.path.join(fd_dir, fd)):
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def adapter(kind, sock, request):
     env = dict(os.environ)
     if sock:
@@ -125,12 +142,19 @@ def adapter(kind, sock, request):
     return out.get("result"), None
 
 
-def user_active(session, last_sent):
-    """使用者 剛在這個對話講過話嗎？看 acc 的 last_seen（每次 UserPromptSubmit 都會更新）。"""
+def last_seen(session):
+    """使用者 最後一次在這個對話講話的時間（acc 的 last_seen，每次 UserPromptSubmit 都會更新）。"""
     try:
         with open(os.path.join(ACC_SESSIONS, session + ".json"), encoding="utf-8") as fh:
-            seen = datetime.datetime.fromisoformat(json.load(fh)["last_seen"]).timestamp()
+            return datetime.datetime.fromisoformat(json.load(fh)["last_seen"]).timestamp()
     except Exception:
+        return 0
+
+
+def user_active(session, last_sent):
+    """使用者 剛在這個對話講過話嗎？"""
+    seen = last_seen(session)
+    if not seen:
         return 0
     if last_sent and abs(seen - last_sent) < OWN_ECHO:
         return 0                                  # 那是我們送進去的那一輪
@@ -184,6 +208,12 @@ class Worker(threading.Thread):
             try:
                 got = call("GET", "/api/listen", session=self.session, wait=30, triggers_only=1,
                            consume=0, heartbeat=0)
+                off = got.get("off")
+                if off and last_seen(self.session) > off["at"] + OWN_ECHO:
+                    # 使用者 回到這個對話打字了：標回線上，留著的訊息下一圈就補送
+                    call("POST", "/api/off", session=self.session, on=0, **{"as": self.session})
+                    self.note("online", "使用者 回到這個對話了，標回線上，補送留著的訊息")
+                    continue
                 if not got["events"]:
                     continue
                 room_id, events = got["room_id"], got["events"]
@@ -228,8 +258,18 @@ class Worker(threading.Thread):
         status = (state.get("threadRuntimeStatus") or {}).get("type")
         if status == "active":
             method = "turn/steer"
-        elif status in ("idle", "notLoaded"):
+        elif status == "idle":
             method = "turn/start"
+        elif status == "notLoaded" and kind == "cli" and window_open(self.session):
+            self.fail("detached", "那個 Codex 視窗沒接上房間（帶了 -c 參數開的視窗會自己獨立跑），訊息留著；"
+                      f"使用者 關掉那個視窗、用 `codex-work resume {self.session}`（或 `codex resume`）重開後會自動補送", events)
+            time.sleep(BACKOFF["detached"])
+            return
+        elif status == "notLoaded":
+            # 視窗關了：使用者 關掉就是不要它跑。標下線、訊息留著，他回到那個對話打字時才補送
+            call("POST", "/api/off", session=self.session, on=1, reason="視窗關了", **{"as": self.session})
+            self.note("offline", f"視窗關了，標成下線；{len(events)} 則訊息留著，使用者 回到那個對話打字時補送")
+            return
         else:
             self.fail("unavailable", f"對話狀態是 {status}（可能是額度用完），訊息留著，之後會再試", events)
             time.sleep(BACKOFF["unavailable"])

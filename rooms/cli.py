@@ -75,6 +75,11 @@ def line_for(event, room_name):
         return head + "改了白板（room board 看內容）"
     if kind == "delivery":
         return head + f"〔送不到 {event['from_name']}〕{event['detail']}"
+    if kind == "off":
+        why = f"：{event['reason']}" if event.get("reason") else ""
+        return head + f"下線了（{event['by_name']} 標的{why}），不會被叫醒，訊息留著"
+    if kind == "on":
+        return head + "回到線上"
     if kind == "room_created":
         return head + f"開了這間房：{event['name']}"
     return head + json.dumps(event, ensure_ascii=False)
@@ -113,7 +118,7 @@ def acc_session(session):
 
 RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 使用者 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
-- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@user 找 使用者）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
+- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@user 找 使用者）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
 - 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
 CODEX_RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
@@ -141,6 +146,8 @@ def hook():
         if me is None:
             return
         full = event_name == "UserPromptSubmit"
+        if full and me.get("off"):
+            _quick("POST", "/api/off", {"as": session, "session": session, "on": "0"})   # 使用者 回到這個對話了
         # 使用者開口那一輪：把累積的都補上；做事中途：只有該叫醒他時才插話
         got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "1",
                                             "triggers_only": "0" if full else "1"})
@@ -246,6 +253,9 @@ def main(argv=None):
     s = sub.add_parser("board"); s.add_argument("--set", metavar="FILE", help="用檔案內容取代白板（- 是 stdin）")
     s = sub.add_parser("threads"); s.add_argument("--all", action="store_true")
     s = sub.add_parser("close-thread"); s.add_argument("thread_id"); s.add_argument("--note", default="")
+    s = sub.add_parser("off", help="把成員標成下線（做完了、視窗關了）：不叫醒，訊息留著")
+    s.add_argument("target", nargs="?", help="名字或 session；不填就是自己"); s.add_argument("--reason", default="")
+    s = sub.add_parser("on", help="把成員標回線上，留著的訊息會補送"); s.add_argument("target", nargs="?")
     s = sub.add_parser("dnd"); s.add_argument("state", choices=["on", "off"]); s.add_argument("--target")
     s = sub.add_parser("listen"); s.add_argument("--once", action="store_true"); s.add_argument("--wait", type=float, default=50)
     s.add_argument("--every", action="store_true", help="每個事件都回（預設只在被 @、任務跟你有關時才回，背景一起帶上）")
@@ -295,6 +305,12 @@ def main(argv=None):
         return show(call("GET", "/api/rooms", actor))
     if a.cmd == "overview":
         return show(call("GET", "/api/overview"))
+    if a.cmd in ("off", "on"):
+        target = a.target or actor
+        if a.target:
+            members = call("GET", f"/api/rooms/{current_room(actor, a.room)}", actor)["members"]
+            target = next((m["session"] for m in members if a.target in (m["name"], m["session"])), a.target)
+        return show(call("POST", "/api/off", actor, session=target, on=a.cmd == "off", reason=getattr(a, "reason", "")))
     if a.cmd == "dnd":
         return show(call("POST", "/api/dnd", actor, session=a.target or actor, on=a.state == "on"))
     if a.cmd == "listen":

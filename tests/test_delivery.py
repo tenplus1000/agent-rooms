@@ -242,6 +242,32 @@ class DispatchTest(LiveServer):
         self.assertEqual([d["action"] for d in self.core.deliveries()][-2:], ["start", "failed_after"])
         self.assertEqual(self.core.room(USER, self.room)["lit"], 1)
 
+    def test_closed_window_goes_offline_until_user_returns(self):
+        self.core.post("s-claude", self.room, "@工人 做 T1")
+        adapter, sent = self.fake_adapter("notLoaded")
+        got = self.pending()
+        with mock.patch.object(dispatch, "locate", return_value=("cli", "/sock", "測試帳號")), \
+                mock.patch.object(dispatch, "adapter", adapter), mock.patch.object(dispatch.time, "sleep"), \
+                mock.patch.object(dispatch, "window_open", return_value=False):
+            self.worker().deliver(got["room_id"], got["events"])
+        self.assertEqual(sent, [])                                     # 關著就不替他跑一輪
+        self.assertTrue(self.core.state["agents"]["s-cx"]["off"])
+        self.assertEqual(self.pending()["events"], [])                 # 下線：不再算該叫醒
+        self.assertEqual(self.core.room(USER, self.room)["lit"], 0)  # 正常狀況，不亮燈
+        notice = self.core.post("s-claude", self.room, "@工人 再一則")["notice"]
+        self.assertIn("已下線", notice)                                 # 找他的人知道
+        self.core.set_off(USER, "s-cx", False)
+        texts = [e.get("text") for e in self.pending()["events"]]
+        self.assertEqual(texts[-2:], ["@工人 做 T1", "@工人 再一則"])     # 回到線上：留著的一起補
+        self.assertEqual(self.deliver("idle")[0]["method"], "turn/start")
+
+    def test_owner_can_mark_done_members_offline(self):
+        self.core.set_off("s-claude", "s-cx", True, "做完了")
+        with self.assertRaises(Exception):
+            self.core.set_off("s-cx", "s-claude", True)                # 成員不能把負責人標下線
+        self.core.post("s-claude", self.room, "@工人 還在嗎")
+        self.assertEqual(self.pending()["events"], [])
+
     def test_running_gets_steer(self):
         self.core.post("s-claude", self.room, "@工人 順便看一下")
         self.assertEqual(self.deliver("active")[0]["method"], "turn/steer")
@@ -271,7 +297,8 @@ class DispatchTest(LiveServer):
         worker = self.worker()
         adapter, _ = self.fake_adapter("notLoaded", err)
         with mock.patch.object(dispatch, "locate", return_value=("cli", "/sock", "測試帳號")), \
-                mock.patch.object(dispatch, "adapter", adapter), mock.patch.object(dispatch.time, "sleep"):
+                mock.patch.object(dispatch, "adapter", adapter), mock.patch.object(dispatch.time, "sleep"), \
+                mock.patch.object(dispatch, "window_open", return_value=True):
             for _ in range(2):
                 got = self.pending()
                 worker.deliver(got["room_id"], got["events"])

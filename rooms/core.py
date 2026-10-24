@@ -232,7 +232,7 @@ class Core:
         for sid in self._members(room_id):
             a = self.state["agents"][sid]
             members.append({"session": sid, "name": a["name"], "kind": a["kind"],
-                            "online": self._online(a), "dnd": a["dnd"],
+                            "online": self._online(a), "dnd": a["dnd"], "off": a.get("off"),
                             "did": self._did(room_id, sid)})
         lit = [t for t in self.state["threads"].values()
                if t["room_id"] == room_id and not t.get("closed") and t["whose"] == USER]
@@ -326,6 +326,10 @@ class Core:
             if held:
                 # 發話的人要知道：訊息記下了，但沒有人被叫醒
                 return dict(event, notice="房間暫停中：這則已記下，但沒有叫醒任何人；使用者 在房裡講一句話才恢復。")
+            off = [self.name_of(m) for m in wake if self.state["agents"][m].get("off")]
+            if off:
+                return dict(event, notice=f"{'、'.join(off)} 已下線（做完了或視窗關了），不會被叫醒；"
+                                          "訊息留著，回到線上時會補給他。")
             return event
 
     def _open_thread(self, room_id, whose, opener, text, kind, ref=None):
@@ -383,6 +387,23 @@ class Core:
             self._commit()
             return dict(agent)
 
+    def set_off(self, actor, session, on, reason=""):
+        """下線：做完了、或視窗關了。下線的人不會被叫醒（不替他跑一輪、不花額度），訊息照留；
+        回到線上時，留著的就一起補送。使用者、他所在房間的負責人、或本人可以切。"""
+        with self.cond:
+            agent = self._agent(session)
+            room = self.state["rooms"].get(agent.get("room_id") or "")
+            if actor not in (USER, session) and not (room and room["owner"] == actor):
+                raise RoomError("只有 使用者、房間負責人或本人能切下線", 403)
+            if bool(on) == bool(agent.get("off")):
+                return dict(agent)
+            agent["off"] = {"at": time.time(), "by": actor, "reason": reason} if on else None
+            if room:
+                self._emit(room["room_id"], "off" if on else "on", session, by=actor, by_name=self.name_of(actor),
+                           reason=reason)
+            self._commit()
+            return dict(agent)
+
     def pending(self, session):
         """還沒送給他的事件（不含他自己的）。勿擾中一律回空，紀錄留著等補送。"""
         agent = self._agent(session)
@@ -410,20 +431,22 @@ class Core:
                 if heartbeat:
                     agent["listening_at"] = time.time()
                 room_id, rows = self.pending(session)
-                ready = rows and (not triggers_only or any(session in e.get("wake", ()) for e in rows))
+                # 下線的人不叫醒：叫醒的事件留著，回到線上時才算數
+                ready = rows and (not triggers_only or (not agent.get("off")
+                                                        and any(session in e.get("wake", ()) for e in rows)))
                 if ready:
                     rows = rows[:limit]
                     if consume:
                         agent["cursor"][room_id] = rows[-1]["seq"]
                     self._save()
-                    return {"room_id": room_id, "dnd": agent["dnd"], "events": rows}
+                    return {"room_id": room_id, "dnd": agent["dnd"], "off": agent.get("off"), "events": rows}
                 left = deadline - time.time()
                 if left <= 0:
                     # 只剩他自己的事件時推進游標，不然下次還會掃到它們
                     if consume and not triggers_only and room_id and not agent["dnd"] and self.events.get(room_id):
                         agent["cursor"][room_id] = self.events[room_id][-1]["seq"]
                     self._save()
-                    return {"room_id": room_id, "dnd": agent["dnd"], "events": []}
+                    return {"room_id": room_id, "dnd": agent["dnd"], "off": agent.get("off"), "events": []}
                 self.cond.wait(left)
 
     def touch(self, session):
@@ -655,6 +678,7 @@ class Core:
             for sid, a in self.state["agents"].items():
                 agents.append({"session": sid, "name": a["name"], "kind": a["kind"],
                                "room_id": a.get("room_id"), "online": self._online(a), "dnd": a["dnd"],
+                               "off": a.get("off"),
                                "delivery": a.get("delivery")})
             return {"rooms": [self._room_view(rid) for rid in self.state["rooms"]], "agents": agents}
 
