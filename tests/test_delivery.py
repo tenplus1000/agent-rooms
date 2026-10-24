@@ -244,8 +244,10 @@ class DispatchTest(LiveServer):
         got = self.pending()
         with mock.patch.object(dispatch, "locate", return_value=where), \
                 mock.patch.object(dispatch, "adapter", adapter), \
-                mock.patch.object(dispatch.time, "sleep"):
-            self.worker().deliver(got["room_id"], got["events"])
+                mock.patch.object(dispatch.time, "sleep"), mock.patch.object(dispatch, "window_open", return_value=False):
+            w = self.worker()
+            w.headless = got.get("headless")
+            w.deliver(got["room_id"], got["events"])
         return sent
 
     def test_idle_gets_turn_start_and_is_acked(self):
@@ -290,6 +292,34 @@ class DispatchTest(LiveServer):
         texts = [e.get("text") for e in self.pending()["events"]]
         self.assertEqual(texts[-2:], ["@工人 做 T1", "@工人 再一則"])     # 回到線上：留著的一起補
         self.assertEqual(self.deliver("idle")[0]["method"], "turn/start")
+
+    def test_owner_wakes_closed_window_in_background(self):
+        self.core.set_off("s-claude", "s-cx", True, "做完了")
+        self.core.post("s-claude", self.room, "@工人 新工作")
+        self.assertEqual(self.deliver("notLoaded"), [])                # 下線：還是不叫
+        self.core.set_off("s-claude", "s-cx", False)                   # 負責人叫回來
+        sent = self.deliver("notLoaded")
+        self.assertEqual(sent[0]["method"], "turn/start")              # 沒有視窗也在背景送
+        self.assertIn("@工人 新工作", sent[0]["params"]["input"][0]["text"])
+        self.assertFalse(self.core.state["agents"]["s-cx"]["off"])
+        self.core.set_off("s-claude", "s-cx", True)                    # 再標下線就不再背景跑
+        self.assertNotIn("headless", self.core.state["agents"]["s-cx"])
+
+    def test_self_back_online_is_not_headless(self):
+        self.core.set_off("s-cx", "s-cx", True, "視窗關了")
+        self.core.set_off("s-cx", "s-cx", False)                       # 使用者 回到那個視窗
+        self.assertNotIn("headless", self.core.state["agents"]["s-cx"])
+
+    def test_spawned_member_is_headless(self):
+        self.core.register("s-new", "codex", "新人", spawned_by="s-claude")
+        self.assertTrue(self.core.state["agents"]["s-new"]["headless"]["spawned"])
+
+    def test_user_turn_waits_until_idle(self):
+        self.core.post("s-claude", self.room, "@工人 順便看一下")
+        with mock.patch.object(dispatch, "user_active", return_value=120):
+            self.assertEqual(self.deliver("active"), [])               # 使用者 那一輪還在跑：不插
+            self.assertEqual(self.core.deliveries()[-1]["action"], "delayed")
+            self.assertEqual(self.deliver("idle")[0]["method"], "turn/start")   # 一閒下來就送，不等計時
 
     def test_owner_can_mark_done_members_offline(self):
         self.core.set_off("s-claude", "s-cx", True, "做完了")

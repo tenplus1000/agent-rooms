@@ -132,8 +132,11 @@ class Core:
 
     # ── agent 登記 ──────────────────────────────────────
 
-    def register(self, session, kind="", name=""):
-        """登記或更新一個點。名字沒給就用 session 前 8 碼；之後 使用者 可以改。"""
+    def register(self, session, kind="", name="", spawned_by=None):
+        """登記或更新一個點。名字沒給就用 session 前 8 碼；之後 使用者 可以改。
+
+        spawned_by：這個對話是房間替人在背景開的（沒有視窗），轉送程式可以直接載入它送訊息。
+        """
         if not session or session == USER:
             raise RoomError("session id 不合法")
         with self.cond:
@@ -143,6 +146,8 @@ class Core:
                          "room_id": None, "dnd": False, "cursor": {}, "listening_at": 0,
                          "registered_at": _now()}
                 self.state["agents"][session] = agent
+                if spawned_by:
+                    agent["headless"] = {"at": time.time(), "by": spawned_by, "spawned": True}
             else:
                 if kind:
                     agent["kind"] = kind
@@ -438,13 +443,21 @@ class Core:
 
     def set_off(self, actor, session, on, reason=""):
         """下線：做完了、或視窗關了。下線的人不會被叫醒（不替他跑一輪、不花額度），訊息照留；
-        回到線上時，留著的就一起補送。使用者、他所在房間的負責人、或本人可以切。"""
+        回到線上時，留著的就一起補送。使用者、他所在房間的負責人、或本人可以切。
+
+        別人（使用者、負責人）把他標回線上，就是要他沒開視窗也起來做事：記成 headless，
+        轉送程式會在背景載入那個對話送進去。本人回來（使用者 回到那個視窗打字）不算。"""
         with self.cond:
             agent = self._agent(session)
             room = self.state["rooms"].get(agent.get("room_id") or "")
             if actor not in (USER, session) and not (room and room["owner"] == actor):
                 raise RoomError("只有 使用者、房間負責人或本人能切下線", 403)
+            if on:
+                agent.pop("headless", None)
+            elif actor != session:
+                agent["headless"] = {"at": time.time(), "by": actor}
             if bool(on) == bool(agent.get("off")):
+                self._commit()
                 return dict(agent)
             agent["off"] = {"at": time.time(), "by": actor, "reason": reason} if on else None
             if room:
@@ -488,14 +501,16 @@ class Core:
                     if consume:
                         agent["cursor"][room_id] = rows[-1]["seq"]
                     self._save()
-                    return {"room_id": room_id, "dnd": agent["dnd"], "off": agent.get("off"), "events": rows}
+                    return {"room_id": room_id, "dnd": agent["dnd"], "off": agent.get("off"),
+                            "headless": agent.get("headless"), "events": rows}
                 left = deadline - time.time()
                 if left <= 0:
                     # 只剩他自己的事件時推進游標，不然下次還會掃到它們
                     if consume and not triggers_only and room_id and not agent["dnd"] and self.events.get(room_id):
                         agent["cursor"][room_id] = self.events[room_id][-1]["seq"]
                     self._save()
-                    return {"room_id": room_id, "dnd": agent["dnd"], "off": agent.get("off"), "events": []}
+                    return {"room_id": room_id, "dnd": agent["dnd"], "off": agent.get("off"),
+                            "headless": agent.get("headless"), "events": []}
                 self.cond.wait(left)
 
     def touch(self, session):
@@ -727,7 +742,7 @@ class Core:
             for sid, a in self.state["agents"].items():
                 agents.append({"session": sid, "name": a["name"], "kind": a["kind"],
                                "room_id": a.get("room_id"), "online": self._online(a), "dnd": a["dnd"],
-                               "off": a.get("off"),
+                               "off": a.get("off"), "headless": bool(a.get("headless")),
                                "delivery": a.get("delivery")})
             return {"rooms": [self._room_view(rid) for rid in self.state["rooms"]], "agents": agents}
 

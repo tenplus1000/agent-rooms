@@ -1,4 +1,8 @@
 #!/bin/sh
 # room：房間核心的命令列（見 rooms/cli.py）
+# 本機設定跟轉送程式共用 repo 根目錄的 local.env（room spawn 要知道有哪些 Codex 帳號）
 HERE=$(dirname "$(readlink -f "$0")")
+if [ -f "$HERE/../local.env" ]; then
+    set -a; . "$HERE/../local.env"; set +a
+fi
 PYTHONPATH="$HERE/.." exec python3 -P -m rooms.cli "$@"

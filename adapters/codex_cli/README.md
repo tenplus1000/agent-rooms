@@ -31,6 +31,9 @@ printf '%s' '也可以從 stdin 讀取文字' | $BRIDGE turn/start THREAD_ID
 
 `rpc` 從 stdin 讀一個完整 JSON 請求，在 stdout 輸出一行 JSON。
 支援與命令列相同的三種方法，並非任意 app-server RPC 的轉送入口。
+另外支援 `thread/start`（只收 `cwd`）：在 daemon 開一個沒有視窗的新對話，回 `threadId`。
+模型、沙盒照帳號設定；核准一律設成 `never`，因為沒有視窗能按核准，需要核准的指令會直接失敗而不是卡住。
+新對話在第一輪之前沒有紀錄檔，`turn/start` 會略過 `thread/resume` 直接送。
 
 ```bash
 printf '%s' '{"id":"delivery-1","method":"turn/steer","params":{"threadId":"THREAD_ID","input":[{"type":"text","text":"補充訊息"}]}}' | "$BRIDGE" rpc

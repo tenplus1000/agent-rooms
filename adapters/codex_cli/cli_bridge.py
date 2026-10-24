@@ -187,15 +187,54 @@ def guard(method, current, expected=None):
         raise BridgeError('expectedTurnId does not match the active turn; no message sent.')
 
 
+def connect():
+    codex_home = Path(os.environ.get('CODEX_HOME', '~/.codex')).expanduser()
+    path = os.environ.get('CODEX_CLI_SOCKET', str(codex_home / 'app-server-control/app-server-control.sock'))
+    timeout = float(os.environ.get('CODEX_CLI_TIMEOUT', '30'))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise BridgeError('CODEX_CLI_TIMEOUT must be a finite positive number')
+    ws = WS(os.path.expanduser(path), timeout)
+    try:
+        ws.call('initialize', {'clientInfo': {'name': 'agent-rooms-cli-bridge', 'version': '1.0'}})
+        ws.send({'jsonrpc': '2.0', 'method': 'initialized'})
+    except Exception:
+        ws.close()
+        raise
+    return ws
+
+
+def start_thread(params):
+    """Open a new daemon-owned thread with no window attached.
+
+    Only cwd is given; model, sandbox and instructions come from the account's config.
+    Approvals are set to never: with no window, nobody could answer a prompt, so a
+    command that needs one fails instead of waiting forever.
+    """
+    if set(params) - {'cwd'}:
+        raise BridgeError('Unsupported parameters: ' + ', '.join(sorted(set(params) - {'cwd'})))
+    cwd = params.get('cwd')
+    if not isinstance(cwd, str) or not os.path.isabs(cwd) or not os.path.isdir(cwd):
+        raise BridgeError('cwd must be an existing absolute directory')
+    ws = connect()
+    try:
+        got = ws.call('thread/start', {'cwd': cwd, 'approvalPolicy': 'never'}, mutation=True)
+    finally:
+        ws.close()
+    return {'threadId': got['thread']['id'], 'cwd': got.get('cwd'), 'model': got.get('model'),
+            'sandbox': got.get('sandbox'), 'approvalPolicy': got.get('approvalPolicy')}
+
+
 def execute(request):
     if not isinstance(request, dict):
         raise BridgeError('Request must be a JSON object')
     method = request.get('method')
-    if method not in ('thread/state', 'turn/start', 'turn/steer'):
+    if method not in ('thread/state', 'turn/start', 'turn/steer', 'thread/start'):
         raise BridgeError('Unsupported bridge method')
     params = request.get('params', {})
     if not isinstance(params, dict):
         raise BridgeError('params must be an object')
+    if method == 'thread/start':
+        return start_thread(params)
     thread_id = params.get('threadId')
     if not isinstance(thread_id, str) or not thread_id.strip():
         raise BridgeError('threadId required')
@@ -216,21 +255,20 @@ def execute(request):
                 or not isinstance(i.get('text'), str) or not i['text'].strip() for i in inputs)):
             raise BridgeError('This adapter currently accepts non-empty text input only')
         inputs = [{'type': 'text', 'text': i['text'], 'text_elements': []} for i in inputs]
-    codex_home = Path(os.environ.get('CODEX_HOME', '~/.codex')).expanduser()
-    path = os.environ.get('CODEX_CLI_SOCKET', str(codex_home / 'app-server-control/app-server-control.sock'))
-    timeout = float(os.environ.get('CODEX_CLI_TIMEOUT', '30'))
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise BridgeError('CODEX_CLI_TIMEOUT must be a finite positive number')
-    ws = WS(os.path.expanduser(path), timeout)
+    ws = connect()
     try:
-        ws.call('initialize', {'clientInfo': {'name': 'agent-rooms-cli-bridge', 'version': '1.0'}})
-        ws.send({'jsonrpc': '2.0', 'method': 'initialized'})
         current = state(ws, thread_id)
         if method == 'thread/state':
             return current
         guard(method, current, params.get('expectedTurnId'))
         # Rejoin the daemon-owned thread; do not override any of its settings.
-        ws.call('thread/resume', {'threadId': thread_id, 'excludeTurns': True})
+        try:
+            ws.call('thread/resume', {'threadId': thread_id, 'excludeTurns': True})
+        except RPCError as error:
+            # A thread opened by thread/start has no rollout until its first turn;
+            # it is already loaded in the daemon, so it can take a turn as is.
+            if 'no rollout found' not in str(error) or current['threadRuntimeStatus']['type'] != 'idle':
+                raise
         current = state(ws, thread_id)
         guard(method, current, params.get('expectedTurnId'))
         if current['threadRuntimeStatus']['type'] not in ('idle', 'active'):

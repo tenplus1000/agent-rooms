@@ -4,11 +4,12 @@ Claude 不經過這裡：它自己用 Monitor 跑 `room listen`，做事中途�
 
 每個 Codex 一條執行緒：
   1. 對核心長輪詢（只等「該叫醒他」的事件，不推進游標、不算心跳）
-  2. 使用者 三分鐘內在那個對話講過話 → 延後，不算次數
-  3. 找出這個對話在哪：桌面版、或 WSL 的哪個 Codex 帳號
-  4. 問狀態：正在跑 → turn/steer；閒著 → turn/start；視窗關了（notLoaded、也沒有程式開著它）→
+  2. 找出這個對話在哪：桌面版、或 WSL 的哪個 Codex 帳號
+  3. 問狀態：閒著 → turn/start；正在跑 → turn/steer，但那一輪是 使用者 剛開的（他三分鐘內在那個
+     對話講過話）就等它跑完再送，不插進他的對話；視窗關了（notLoaded、也沒有程式開著它）→
      標成下線、只留訊息，不替他跑一輪、不花額度。使用者 回到那個對話打字（acc 的 last_seen 更新）
-     就標回線上，留著的一起補送。做完的成員由負責人用 `room off` 標下線，效果一樣；
+     就標回線上，留著的一起補送。做完的成員由負責人用 `room off` 標下線，效果一樣。
+     負責人或 使用者 用 `room on` 叫回來的、或 `room spawn` 開的（headless）→ 沒有視窗也在背景載入送進去；
      其他（額度用完、桌面版沒開）→ 記錄、亮燈、過一陣子再試
   5. 送成功才 ack；送出後結果不確定 → 也 ack（不自動重送），記錄並亮燈，請 使用者 查紀錄
 
@@ -48,7 +49,7 @@ USER_IDLE = 180          # 使用者 講完話三分鐘內不插進那個對話
 OWN_ECHO = 20             # 我們自己送進去的那一輪也會觸發 hook、更新 last_seen，這段時間內的不算 使用者
 AFTER_CHECK = 8           # 送出後幾秒回頭確認那一輪有沒有跑起來
 CAP_PER_HOUR = 30         # 每個 agent 每小時最多被房間叫醒幾次
-BACKOFF = {"unavailable": 600, "desktop_closed": 300, "race": 3, "error": 60, "detached": 60}
+BACKOFF = {"unavailable": 600, "desktop_closed": 300, "race": 3, "error": 60, "detached": 60, "user_turn": 5}
 DETACHED = "already has an active writer"   # 視窗自己握著對話、沒接背景服務：daemon 確定沒收下
 
 
@@ -107,16 +108,35 @@ def locate(thread_id):
     """
     if _found(DESKTOP_SESSIONS, thread_id):
         return "desktop", None, "桌面版"
-    if not _found(WSL_SESSIONS, thread_id):
-        return None
+    # 先問 daemon：剛開、還沒跑過第一輪的對話還沒有紀錄檔
     for home in ACCOUNTS:
         state, error = adapter("cli", _sock(home), {"method": "thread/state", "params": {"threadId": thread_id}})
         if not error and (state.get("threadRuntimeStatus") or {}).get("type") in ("idle", "active"):
             return "cli", _sock(home), f"{os.path.basename(home)}（對話掛在這個帳號）"
+    if not _found(WSL_SESSIONS, thread_id):
+        return None
     for home in ACCOUNTS:
         if _has_quota(home):
             return "cli", _sock(home), f"{os.path.basename(home)}（還有額度）"
     return "cli", None, "兩個 Codex 帳號的額度都用完了"
+
+
+def spawn(cwd):
+    """在背景服務開一個新的 Codex 對話（沒有視窗）。帳號照順序挑還有額度的。
+
+    回 (thread id, 帳號資料夾)；開不成丟 RuntimeError。模型、權限照那個帳號的設定，
+    只有核准改成 never：沒有視窗就沒人能按核准，要核准的指令直接失敗、不會卡住。
+    """
+    homes = [h for h in ACCOUNTS if _has_quota(h)]
+    if not homes:
+        raise RuntimeError("Codex 帳號的額度都用完了")
+    errors = []
+    for home in homes:
+        got, error = adapter("cli", _sock(home), {"method": "thread/start", "params": {"cwd": cwd}})
+        if not error:
+            return got["threadId"], home
+        errors.append(f"{os.path.basename(home)}：{error}")
+    raise RuntimeError("開不了新的 Codex 對話：" + "；".join(errors))
 
 
 def window_holder(thread_id):
@@ -176,7 +196,7 @@ def last_seen(session):
 
 
 def user_active(session, last_sent):
-    """使用者 剛在這個對話講過話嗎？"""
+    """使用者 剛在這個對話講過話嗎？回還剩幾秒（0 是沒有）。"""
     seen = last_seen(session)
     if not seen:
         return 0
@@ -204,6 +224,8 @@ class Worker(threading.Thread):
         self.last_sent = 0
         self.stop = False
         self.reported = None      # 這一批送不到已經通知過了（重試時不再洗版）
+        self.headless = None      # 負責人或 使用者 要他沒開視窗也做事（room on／room spawn）
+        self.held = None          # 這一批已經記過「等 使用者 那一輪」了
 
     def note(self, action, detail, light=False, notify=()):
         log(self.session[:8], action, detail)
@@ -241,13 +263,7 @@ class Worker(threading.Thread):
                 if not got["events"]:
                     continue
                 room_id, events = got["room_id"], got["events"]
-                wait = user_active(self.session, self.last_sent)
-                if wait:
-                    if held != events[-1]["seq"]:
-                        self.note("delayed", f"使用者 剛在這個對話講過話，{int(wait)} 秒後再送")
-                        held = events[-1]["seq"]
-                    time.sleep(min(wait, 30))
-                    continue
+                self.headless = got.get("headless")
                 self.sent = [t for t in self.sent if time.time() - t < 3600]
                 if len(self.sent) >= CAP_PER_HOUR:
                     if held != ("cap", events[-1]["seq"]):
@@ -280,6 +296,13 @@ class Worker(threading.Thread):
             return
         call("POST", "/api/touch", session=self.session)
         status = (state.get("threadRuntimeStatus") or {}).get("type")
+        if status == "active" and user_active(self.session, self.last_sent):
+            # 正在跑的是 使用者 剛開的那一輪：不插進去，等它跑完（閒下來）馬上送
+            if self.held != events[-1]["seq"]:
+                self.note("delayed", "使用者 正在跟它講話，等那一輪跑完再送")
+                self.held = events[-1]["seq"]
+            time.sleep(BACKOFF["user_turn"])
+            return
         if status == "active":
             method = "turn/steer"
         elif status == "idle":
@@ -289,6 +312,9 @@ class Worker(threading.Thread):
                       f"關掉那個視窗、用 {resume_hint(self.session, window_holder(self.session))} 重開後會自動補送", events)
             time.sleep(BACKOFF["detached"])
             return
+        elif status == "notLoaded" and kind == "cli" and self.headless:
+            method = "turn/start"            # 轉接器會先在背景載入（thread/resume）再送
+            why += "，背景載入（" + ("房間開的" if self.headless.get("spawned") else "被叫回來的") + "）"
         elif status == "notLoaded":
             # 視窗關了：使用者 關掉就是不要它跑。標下線、訊息留著，他回到那個對話打字時才補送
             call("POST", "/api/off", session=self.session, on=1, reason="視窗關了", **{"as": self.session})

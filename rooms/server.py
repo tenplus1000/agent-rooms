@@ -70,7 +70,7 @@ def make_handler(core):
             if method == "GET" and path == "/api/overview":
                 return core.overview()
             if method == "POST" and path == "/api/register":
-                return core.register(a["session"], a.get("kind", ""), a.get("name", ""))
+                return core.register(a["session"], a.get("kind", ""), a.get("name", ""), a.get("spawned_by"))
             if method == "POST" and path == "/api/rename":
                 return core.rename(actor, a["session"], a["name"])
             if method == "POST" and path == "/api/move":
