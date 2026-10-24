@@ -326,8 +326,10 @@ class Worker(threading.Thread):
             return
         room = call("GET", f"/api/rooms/{room_id}", **{"as": self.session})
         text = render(room, self.session, events)
-        result, error = adapter(kind, sock, {"method": method, "params": {
-            "threadId": self.session, "input": [{"type": "text", "text": text}]}})
+        params = {"threadId": self.session, "input": [{"type": "text", "text": text}]}
+        if kind == "cli" and method == "turn/start" and (self.headless or {}).get("spawned"):
+            params["sandbox"] = "workspace-write"     # 房間開的成員要能寫它的工作資料夾
+        result, error = adapter(kind, sock, {"method": method, "params": params})
         if error and "No message sent" in error:
             log(self.session[:8], "狀態剛好變了，重試", error)
             time.sleep(BACKOFF["race"])

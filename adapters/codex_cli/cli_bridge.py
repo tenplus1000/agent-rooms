@@ -206,7 +206,9 @@ def connect():
 def start_thread(params):
     """Open a new daemon-owned thread with no window attached.
 
-    Only cwd is given; model, sandbox and instructions come from the account's config.
+    Only cwd is given; model and instructions come from the account's config.
+    The sandbox is workspace-write, like a window opened in a trusted folder (the daemon
+    does not apply folder trust here and would fall back to read-only).
     Approvals are set to never: with no window, nobody could answer a prompt, so a
     command that needs one fails instead of waiting forever.
     """
@@ -217,7 +219,8 @@ def start_thread(params):
         raise BridgeError('cwd must be an existing absolute directory')
     ws = connect()
     try:
-        got = ws.call('thread/start', {'cwd': cwd, 'approvalPolicy': 'never'}, mutation=True)
+        got = ws.call('thread/start', {'cwd': cwd, 'approvalPolicy': 'never', 'sandbox': 'workspace-write'},
+                      mutation=True)
     finally:
         ws.close()
     return {'threadId': got['thread']['id'], 'cwd': got.get('cwd'), 'model': got.get('model'),
@@ -241,6 +244,10 @@ def execute(request):
     allowed = {'threadId'}
     if method != 'thread/state':
         allowed |= {'input', 'clientUserMessageId'}
+    if method == 'turn/start':
+        allowed.add('sandbox')
+    if params.get('sandbox', 'workspace-write') != 'workspace-write':
+        raise BridgeError('sandbox can only be workspace-write')
     if method == 'turn/steer':
         allowed.add('expectedTurnId')
     if set(params) - allowed:
@@ -276,6 +283,10 @@ def execute(request):
         outgoing = {'threadId': thread_id, 'input': inputs}
         if 'clientUserMessageId' in params:
             outgoing['clientUserMessageId'] = params['clientUserMessageId']
+        if 'sandbox' in params:
+            # Threads opened before thread/start set a sandbox were read-only; this turn
+            # and the ones after it get workspace-write.
+            outgoing['sandboxPolicy'] = {'type': 'workspaceWrite'}
         if method == 'turn/steer':
             outgoing['expectedTurnId'] = current['activeTurnId']
         return ws.call(method, outgoing, mutation=True)
