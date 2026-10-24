@@ -23,7 +23,9 @@ from rooms import judge
 
 USER = "user"
 ONLINE_SECONDS = 75          # 監聽一輪最長 50 秒，再寬一點才算離線
-MAX_HOPS = 20                # agent 之間連續互相 @ 幾次就暫停，等 使用者 開口（agentchattr 的 loop guard）
+MAX_HOPS = 20
+PAUSED_TEXT = (f"房間暫停了：agent 之間連續互相 @ 超過 {MAX_HOPS} 次（使用者 一直沒出現），之後的訊息照記但不叫醒任何人。"
+               "使用者 在房裡、或在任何一個成員自己的對話裡講一句話就恢復；請負責人告訴 使用者。")                # agent 之間連續互相 @ 幾次就暫停，等 使用者 開口（agentchattr 的 loop guard）
 EVERYONE = ("all", "全部", "大家")
 MENTION = re.compile(r"@([\w\-\.㐀-鿿]+)")
 
@@ -362,13 +364,12 @@ class Core:
                 wake = [m for m in members if judged["probs"].get(self.name_of(m), 0) >= judge.THRESHOLD]
             elif not mentions and not everyone and room["owner"] in members:
                 wake.append(room["owner"])           # 判官叫不到：退回對負責人說，不然負責人看不到
+            just_paused = False
             if actor != USER and wake:
                 room["hops"] = room.get("hops", 0) + 1
                 if room["hops"] > MAX_HOPS and not room.get("paused"):
-                    room["paused"] = True
-                    self._open_thread(room_id, USER, actor,
-                                      f"agent 之間連續互相 @ 超過 {MAX_HOPS} 次，已暫停叫醒；使用者 在房裡講一句話就恢復",
-                                      "paused")
+                    room["paused"] = just_paused = True
+                    self._open_thread(room_id, USER, actor, PAUSED_TEXT, "paused")
                 if room.get("paused"):
                     wake = []                       # 暫停中：訊息照記，不叫醒人
             held = bool(room.get("paused")) and actor != USER
@@ -376,6 +377,9 @@ class Core:
             event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake, held=held, **extra)
             for target in mentions:
                 self._open_thread(room_id, target, actor, text, "mention", ref=event["seq"])
+            if just_paused and room["owner"] in members:
+                # 負責人要知道房間停了（發話的人收到的 notice 不會轉告別人），由他告訴 使用者；只叫這一次
+                self._emit(room_id, "paused", actor, text=PAUSED_TEXT, wake=[room["owner"]])
             self._commit()
             if held:
                 # 發話的人要知道：訊息記下了，但沒有人被叫醒
@@ -385,6 +389,22 @@ class Core:
                 return dict(event, notice=f"{'、'.join(off)} 已下線（做完了或視窗關了），不會被叫醒；"
                                           "訊息留著，回到線上時會補給他。")
             return event
+
+    def user_here(self, session):
+        """使用者 在某個成員自己的對話裡講話了：等同他在那個成員所在的房間，互相 @ 的計數歸零、暫停解除。"""
+        with self.cond:
+            agent = self._agent(session)
+            room = self.state["rooms"].get(agent.get("room_id") or "")
+            if not room:
+                return {}
+            was_paused = bool(room.get("paused"))
+            room["hops"] = 0
+            room["paused"] = False
+            for thread in self.state["threads"].values():     # 只收掉「暫停」那條；@user 的問題他還沒回
+                if thread["room_id"] == room["room_id"] and thread["kind"] == "paused" and not thread.get("closed"):
+                    thread.update(closed=_now(), closed_by=USER, note=f"使用者 在 {agent['name']} 的對話裡講話")
+            self._commit()
+            return {"room_id": room["room_id"], "resumed": was_paused}
 
     def _open_thread(self, room_id, whose, opener, text, kind, ref=None):
         # 同一個人、同一種、同一個來源只留一條，新的蓋舊的

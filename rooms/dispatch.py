@@ -246,6 +246,7 @@ class Worker(threading.Thread):
         self.reported = None      # 這一批送不到已經通知過了（重試時不再洗版）
         self.headless = None      # 負責人或 使用者 要他沒開視窗也做事（room on／room spawn）
         self.held = None          # 這一批已經記過「等 使用者 那一輪」了
+        self.user_seen = last_seen(session)   # 已經回報過的 使用者 最後一次在這個對話講話的時間
 
     def note(self, action, detail, light=False, notify=()):
         log(self.session[:8], action, detail)
@@ -272,6 +273,7 @@ class Worker(threading.Thread):
         held = None
         while not self.stop:
             try:
+                self.check_user()
                 got = call("GET", "/api/listen", session=self.session, wait=30, triggers_only=1,
                            consume=0, heartbeat=0)
                 off = got.get("off")
@@ -296,6 +298,15 @@ class Worker(threading.Thread):
             except Exception as error:
                 log(self.session[:8], "錯誤", error)
                 time.sleep(BACKOFF["error"])
+
+    def check_user(self):
+        """使用者 在這個 Codex 對話裡講話了（不是我們送進去的那一輪）：告訴核心他在場，互相 @ 的計數歸零。"""
+        seen = last_seen(self.session)
+        if seen > self.user_seen and not (self.last_sent and abs(seen - self.last_sent) < OWN_ECHO):
+            got = call("POST", "/api/user_here", session=self.session)
+            if got.get("resumed"):
+                self.note("resumed", "使用者 在這個對話講話了，房間解除暫停")
+        self.user_seen = max(self.user_seen, seen)
 
     def deliver(self, room_id, events):
         where = locate(self.session)

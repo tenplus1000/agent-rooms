@@ -80,6 +80,8 @@ def line_for(event, room_name):
         return head + f"下線了（{event['by_name']} 標的{why}），不會被叫醒，訊息留著"
     if kind == "on":
         return head + "回到線上"
+    if kind == "paused":
+        return head + event["text"]
     if kind == "room_created":
         return head + f"開了這間房：{event['name']}"
     return head + json.dumps(event, ensure_ascii=False)
@@ -147,7 +149,11 @@ def hook():
         if me is None:
             return
         full = event_name == "UserPromptSubmit"
-        if full and me.get("off"):
+        # 房間叫醒那一輪也會觸發 UserPromptSubmit（task-notification），那不是 使用者 開口
+        user_typed = full and "<task-notification>" not in str(payload.get("prompt", ""))[:200]
+        if user_typed:
+            _quick("POST", "/api/user_here", {"session": session})   # 使用者 在場：互相 @ 的計數歸零
+        if user_typed and me.get("off"):
             _quick("POST", "/api/off", {"as": session, "session": session, "on": "0"})   # 使用者 回到這個對話了
         # 使用者開口那一輪：把累積的都補上；做事中途：只有該叫醒他時才插話
         got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "1",

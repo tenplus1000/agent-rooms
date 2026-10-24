@@ -126,6 +126,28 @@ class WakeTest(unittest.TestCase):
         self.assertEqual(self.core.post("s-a", self.room, "@b 繼續")["wake"], ["s-b"])
         self.assertEqual(self.core.room(USER, self.room)["lit"], 0)
 
+    def pause(self):
+        for i in range(MAX_HOPS):
+            self.core.post("s-a" if i % 2 == 0 else "s-b", self.room, "@b 換你" if i % 2 == 0 else "@a 換你")
+        return self.core.post("s-a", self.room, "@b 再換你")
+
+    def test_pause_wakes_the_owner_once(self):
+        self.pause()
+        paused = [e for e in self.core.events[self.room] if e["type"] == "paused"]
+        self.assertEqual(len(paused), 1)
+        self.assertEqual(paused[0]["wake"], ["s-boss"])                 # 負責人知道，好轉告 使用者
+        self.core.post("s-b", self.room, "@a 還在嗎")
+        self.assertEqual(len([e for e in self.core.events[self.room] if e["type"] == "paused"]), 1)
+
+    def test_user_talking_in_a_members_own_chat_resumes(self):
+        self.pause()
+        self.assertTrue(self.core.user_here("s-boss")["resumed"])
+        self.assertEqual(self.core.post("s-a", self.room, "@b 繼續")["wake"], ["s-b"])
+        self.assertEqual(self.core.room(USER, self.room)["lit"], 0)
+        self.core.post("s-a", self.room, "@user 這個要你決定")
+        self.core.user_here("s-a")
+        self.assertEqual(self.core.room(USER, self.room)["lit"], 1)  # @user 的問題他還沒回，燈留著
+
     def test_delivery_records_and_lights_once(self):
         self.core.record_delivery("s-a", "unavailable", "額度用完", light=True)
         self.core.record_delivery("s-a", "unavailable", "額度用完", light=True)
@@ -161,9 +183,10 @@ class LiveServer(unittest.TestCase):
         self.server.server_close()
         self._tmp.cleanup()
 
-    def run_hook(self, session, event):
+    def run_hook(self, session, event, prompt="嗨"):
         out = io.StringIO()
-        with mock.patch("sys.stdin", io.StringIO(json.dumps({"session_id": session, "hook_event_name": event}))), \
+        payload = {"session_id": session, "hook_event_name": event, "prompt": prompt}
+        with mock.patch("sys.stdin", io.StringIO(json.dumps(payload))), \
                 redirect_stdout(out):
             cli.hook()
         text = out.getvalue().strip()
@@ -205,6 +228,21 @@ class HookTest(LiveServer):
             self.assertIsNone(cli.rewake("s-claude"))
         left = self.core.listen("s-claude", wait=0, triggers_only=True)["events"]
         self.assertIn("@主持 有問題", [e.get("text") for e in left])        # 舊的沒把訊息吃掉
+
+    def test_user_prompt_resets_hops_but_wakeups_do_not(self):
+        self.core.state["rooms"][self.room].update(hops=MAX_HOPS + 1, paused=True)
+        self.run_hook("s-claude", "UserPromptSubmit", "<task-notification>\n<summary>Stop hook feedback</summary>")
+        self.assertTrue(self.core.state["rooms"][self.room]["paused"])    # 房間叫醒的那一輪不算 使用者
+        self.run_hook("s-claude", "UserPromptSubmit", "阿還沒標完喔?")
+        self.assertFalse(self.core.state["rooms"][self.room]["paused"])
+        self.assertEqual(self.core.state["rooms"][self.room]["hops"], 0)
+
+    def test_user_typing_in_a_codex_chat_resets_hops(self):
+        self.core.state["rooms"][self.room].update(hops=MAX_HOPS + 1, paused=True)
+        w = dispatch.Worker("s-cx")
+        with mock.patch.object(dispatch, "last_seen", return_value=w.user_seen + 100):
+            w.check_user()
+        self.assertFalse(self.core.state["rooms"][self.room]["paused"])
 
     def test_post_tool_use_only_interrupts_for_triggers(self):
         self.core.post(USER, self.room, "@工人 只是背景")                 # 找的是別人，對主持是背景

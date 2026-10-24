@@ -81,6 +81,8 @@ def make_handler(core):
                 return core.set_role(actor, a["session"], a.get("role", ""))
             if method == "POST" and path == "/api/off":
                 return core.set_off(actor, a["session"], a.get("on") in (True, "1", "true", 1), a.get("reason", ""))
+            if method == "POST" and path == "/api/user_here":
+                return core.user_here(a["session"])
             if method == "POST" and path == "/api/dnd":
                 return core.set_dnd(actor, a["session"], a.get("on") in (True, "1", "true", 1))
             if method == "GET" and path == "/api/listen":
