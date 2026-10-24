@@ -2,3 +2,6 @@ data/
 __pycache__/
 *.pyc
 *.tmp
+
+# 本機設定
+local.env

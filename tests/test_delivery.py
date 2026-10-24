@@ -336,7 +336,7 @@ class DispatchTest(LiveServer):
         notices = [e for e in self.core.history(USER, self.room) if e["type"] == "delivery"]
         self.assertEqual(len(notices), 1)                              # 重試不洗版
         self.assertEqual(notices[0]["wake"], ["s-claude"])             # 叫醒找他的人
-        self.assertIn("codex-work resume", notices[0]["detail"])
+        self.assertIn("codex resume s-cx", notices[0]["detail"])
 
     def test_unknown_thread_is_reported(self):
         self.core.post("s-claude", self.room, "@工人 做 T1")

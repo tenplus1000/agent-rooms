@@ -89,7 +89,10 @@ bin/room overview
 | `ROOMS_JUDGE_KEY` | 判官金鑰；沒設就用 `OPENROUTER_API_KEY` |
 | `ACC_SESSIONS` | [acc](https://github.com/tenplus1000/acc) 的 session 資料夾：用來判斷使用者剛在哪個對話講過話 |
 | `ROOMS_WINDOWS_HOME` | WSL 上的 Windows 使用者資料夾（預設自動找） |
+| `ROOMS_CODEX_HOMES` | 用冒號分隔的 Codex 帳號（`CODEX_HOME`）清單，預設 `~/.codex` |
 | `ROOMS_QUOTA_HELPER` | 選用：放 `codexquota.py` 的資料夾，用來在多個 Codex 帳號間挑還有額度的 |
+
+轉送程式會讀 repo 根目錄的 `local.env`（不進 git），本機設定可以寫在那裡。
 
 ## 測試
 

@@ -34,11 +34,13 @@ BASE = os.environ.get("ROOMS_URL", "http://127.0.0.1:8775")
 ACC_SESSIONS = str(paths.acc_sessions())
 DESKTOP = os.path.join(ROOT, "adapters", "codex_desktop", "codex-desktop")
 CLI = os.path.join(ROOT, "adapters", "codex_cli", "codex-cli")
-# 桌面版的紀錄在 Windows；WSL 的兩個 Codex 帳號共用同一個 sessions（account2 的是捷徑），
-# 所以帳號不能從紀錄放哪判斷，要直接問兩個 daemon。
+# 桌面版的紀錄在 Windows。WSL 上可以有好幾個 Codex 帳號（各自的 CODEX_HOME），它們可能共用同一個
+# sessions 資料夾，所以帳號不能從紀錄放哪判斷，要直接問每個帳號的 daemon。
 DESKTOP_SESSIONS = str(paths.desktop_codex_sessions() or "/nonexistent")
 WSL_SESSIONS = os.path.expanduser("~/.codex/sessions")
-ACCOUNTS = [os.path.expanduser("~/.codex"), os.path.expanduser("~/.codex-work")]
+# ROOMS_CODEX_HOMES：用冒號分隔的 CODEX_HOME 清單（第一個優先）；沒設就只有 ~/.codex
+ACCOUNTS = [os.path.expanduser(h) for h in
+            (os.environ.get("ROOMS_CODEX_HOMES", "").strip() or "~/.codex").split(":") if h.strip()]
 # 選用：放著 codexquota.py（read(codex_home) → 五小時／一週用量百分比）的資料夾，用來挑還有額度的帳號
 QUOTA_HELPER = os.environ.get("ROOMS_QUOTA_HELPER", "").strip()
 
@@ -117,18 +119,35 @@ def locate(thread_id):
     return "cli", None, "兩個 Codex 帳號的額度都用完了"
 
 
-def window_open(thread_id):
-    """背景服務沒載入這個對話時，還有沒有程式開著它的紀錄檔（＝沒接上服務、自己獨立跑的視窗）。"""
+def window_holder(thread_id):
+    """背景服務沒載入這個對話時，還有沒有程式開著它的紀錄檔（＝沒接上服務、自己獨立跑的視窗）。
+
+    有的話回那個視窗的 CODEX_HOME（看它屬於哪個帳號），沒有回 None。
+    """
     for fd_dir in glob.glob("/proc/[0-9]*/fd"):
+        proc = os.path.dirname(fd_dir)
         try:
-            if "app-server-daemon" in os.readlink(os.path.join(os.path.dirname(fd_dir), "exe")):
+            if "app-server-daemon" in os.readlink(os.path.join(proc, "exe")):
                 continue                    # 背景服務自己開著的不算視窗
-            for fd in os.listdir(fd_dir):
-                if thread_id in os.readlink(os.path.join(fd_dir, fd)):
-                    return True
+            if not any(thread_id in os.readlink(os.path.join(fd_dir, fd)) for fd in os.listdir(fd_dir)):
+                continue
+            with open(os.path.join(proc, "environ"), "rb") as fh:
+                env = dict(v.split(b"=", 1) for v in fh.read().split(b"\0") if b"=" in v)
+            return env.get(b"CODEX_HOME", b"~/.codex").decode()
         except OSError:
             continue
-    return False
+    return None
+
+
+def window_open(thread_id):
+    return window_holder(thread_id) is not None
+
+
+def resume_hint(thread_id, home):
+    """重開那個對話的指令；不是預設帳號就帶上 CODEX_HOME。"""
+    home = (home or "~/.codex").replace(os.path.expanduser("~"), "~")
+    prefix = "" if home in ("~/.codex", "") else f"CODEX_HOME={home} "
+    return f"`{prefix}codex resume {thread_id}`"
 
 
 def adapter(kind, sock, request):
@@ -266,8 +285,8 @@ class Worker(threading.Thread):
         elif status == "idle":
             method = "turn/start"
         elif status == "notLoaded" and kind == "cli" and window_open(self.session):
-            self.fail("detached", "那個 Codex 視窗沒接上房間（帶了 -c 參數開的視窗會自己獨立跑），訊息留著；"
-                      f"使用者 關掉那個視窗、用 `codex-work resume {self.session}`（或 `codex resume`）重開後會自動補送", events)
+            self.fail("detached", "那個 Codex 視窗沒接上房間（帶了 -c 這類參數開的視窗會自己獨立跑），訊息留著；"
+                      f"關掉那個視窗、用 {resume_hint(self.session, window_holder(self.session))} 重開後會自動補送", events)
             time.sleep(BACKOFF["detached"])
             return
         elif status == "notLoaded":
@@ -288,8 +307,8 @@ class Worker(threading.Thread):
             time.sleep(BACKOFF["race"])
             return
         if error and DETACHED in error:
-            self.fail("detached", "那個 Codex 視窗沒接上房間（帶了 -c 參數開的視窗會自己獨立跑），訊息留著；"
-                      f"使用者 關掉那個視窗、用 `codex-work resume {self.session}`（或 `codex resume`）重開後會自動補送", events)
+            self.fail("detached", "那個 Codex 視窗沒接上房間（帶了 -c 這類參數開的視窗會自己獨立跑），訊息留著；"
+                      f"關掉那個視窗、用 {resume_hint(self.session, window_holder(self.session))} 重開後會自動補送", events)
             time.sleep(BACKOFF["detached"])
             return
         # 送出去了，或結果不確定：都推進游標，不自動重送

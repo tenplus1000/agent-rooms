@@ -1,4 +1,8 @@
 #!/bin/sh
 # 轉送程式：替房裡的 Codex 監聽並送進它的對話（跑在本機，不進 container）
+# 本機設定（ROOMS_CODEX_HOMES、ROOMS_QUOTA_HELPER…）可以寫在 repo 根目錄的 local.env，不會進 git
 HERE=$(dirname "$(readlink -f "$0")")
+if [ -f "$HERE/../local.env" ]; then
+    set -a; . "$HERE/../local.env"; set +a
+fi
 PYTHONPATH="$HERE/.." exec python3 -m rooms.dispatch "$@"
