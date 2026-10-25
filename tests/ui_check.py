@@ -222,6 +222,25 @@ try:
     n = js("document.querySelectorAll('.bubble').length")
     js("document.querySelector('.bubble .x').click()"); time.sleep(0.8)
     check("泡泡 ✕ 收起", js("document.querySelectorAll('.bubble').length") == n - 1)
+    # 慢慢拖房間（中間會碰到每 2.5 秒的重畫）：途中不能彈回去，放下後畫面位置要等於存下的位置
+    js("Object.keys(S.wins).forEach(closeWin)"); time.sleep(0.5)
+
+    def room_transform(rid):
+        return js("document.querySelector('[data-room=" + json.dumps(rid) + "]').getAttribute('transform')")
+
+    lab = center('[data-room="%s"] .room-label' % r2)
+    before = room_transform(r2)
+    mouse("mouseMoved", *lab); mouse("mousePressed", *lab)
+    jumped = False
+    for step in range(1, 31):
+        mouse("mouseMoved", lab[0] + step * 4, lab[1] + step * 2); time.sleep(0.11)
+        if step > 3 and room_transform(r2) == before:
+            jumped = True
+    mouse("mouseReleased", lab[0] + 120, lab[1] + 60); time.sleep(3.2)
+    check("拖房間途中沒有彈回原位", not jumped)
+    pos = next(r for r in call("GET", "/api/overview")["rooms"] if r["room_id"] == r2)["pos"]
+    shown = [float(v) for v in room_transform(r2)[len("translate("):-1].split(",")]
+    check("放下後畫面位置＝存下的位置", all(abs(a - b) < 0.6 for a, b in zip(shown, pos)))
     # 縮放、平移
     k0 = js("S.view.k")
     ws.cdp("Input.dispatchMouseEvent", type="mouseWheel", x=700, y=450, deltaX=0, deltaY=-300); time.sleep(0.4)
