@@ -181,6 +181,8 @@ def hook():
             return rewake(session)
         full = event_name == "UserPromptSubmit"
         overview = _quick("GET", "/api/overview", {})
+        if full and overview and not any(a["session"] == session for a in overview.get("agents", [])):
+            auto_register(session, payload)           # 沒登記過的對話：使用者開口就變成畫面上的一個點
         if overview and session in (overview.get("globals") or {}):
             return global_hook(session, event_name, full, overview)
         rooms = _quick("GET", "/api/rooms", {"as": session})
@@ -218,6 +220,42 @@ def hook():
                                                  "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False))
     except Exception:
         return
+
+
+def auto_register(session, payload):
+    """使用者在一個還沒登記的對話裡講話：登記成一個沒進房的點，畫面上看得到、拖得進房間。
+
+    名字用工作資料夾的名稱（家目錄就用 session 前 8 碼），「在做什麼」用 acc 的目標或第一句話；之後都可以改。
+    `claude -p` 這類程式呼叫的對話不登記。"""
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "") in ("sdk-cli", "sdk-ts", "sdk-py"):
+        return
+    info = acc_session(session)
+    cwd = payload.get("cwd") or info.get("cwd") or ""
+    base = os.path.basename(cwd.rstrip("/")) if cwd and os.path.abspath(cwd) != os.path.expanduser("~") else ""
+    kind = info.get("agent") or kind_of(session) or "claude"
+    got = (base and _quick("POST", "/api/register", {"session": session, "kind": kind, "name": base})) or \
+        _quick("POST", "/api/register", {"session": session, "kind": kind})
+    if not got:
+        return
+    role = info.get("objective") or ""
+    if not role:
+        try:
+            role = (eval_list(info.get("history")) or [{}])[-1].get("objective", "")
+        except Exception:
+            role = ""
+    role = role or str(payload.get("prompt") or info.get("first_prompt") or "")
+    if role:
+        _quick("POST", "/api/role", {"as": session, "session": session, "role": role.strip().replace("\n", " ")[:80]})
+
+
+def eval_list(value):
+    """acc 的欄位可能是清單、也可能是它的字串形式。"""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.startswith("["):
+        import ast
+        return ast.literal_eval(value)
+    return []
 
 
 def maintainer_line(overview):
