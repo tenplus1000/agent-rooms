@@ -221,12 +221,21 @@ class Core:
             self._commit()
             return dict(self.state["rooms"][room_id])
 
-    def delete_room(self, actor, room_id):
-        """刪房間（使用者或維修；常駐代理不能刪）。房裡要先沒人；紀錄搬到 rooms/deleted/ 封存，不真的刪。"""
+    def delete_room(self, actor, room_id, evict=False):
+        """刪房間（使用者或維修；常駐代理不能刪）。房裡要先沒人；紀錄搬到 rooms/deleted/ 封存，不真的刪。
+
+        evict：房裡的人全部下線時，先把他們移出房間再刪（畫面上確認過才送）。
+        """
         with self.cond:
             if actor != USER and self._globals().get(actor, {}).get("kind") != "maintainer":
                 raise RoomError("只有使用者或維修能刪房間", 403)
             room = self._room(room_id)
+            if evict:
+                awake = [self.name_of(m) for m in self._members(room_id) if not self.state["agents"][m].get("off")]
+                if awake:
+                    raise RoomError(f"{room['name']} 裡還有沒下線的人：{'、'.join(awake)}")
+                for m in self._members(room_id):
+                    self.move(actor, m, None)
             if self._members(room_id):
                 raise RoomError(f"{room['name']} 裡還有人：先把成員移出去（move <名字> none）再刪")
             archive = self.data / "rooms" / "deleted"
@@ -695,6 +704,24 @@ class Core:
             self._commit()
             return dict(agent)
 
+    def shelve(self, actor, session, shelved):
+        """收起來：使用者或維修整理下線的人，畫面上不再列在狀態列與 @ 名單；紀錄都留著。
+        要收先得下線、也不能在房裡；他回到線上（自己回來或被叫回來）就自動拿出來。"""
+        if not self._admin(actor):
+            raise RoomError("只有使用者或維修能整理", 403)
+        with self.cond:
+            agent = self._agent(session)
+            if shelved:
+                if not agent.get("off"):
+                    raise RoomError(f"{agent['name']} 還沒下線，先下線再收")
+                if agent.get("room_id"):
+                    raise RoomError(f"{agent['name']} 還在 {agent['room_id']}，先移出房間再收")
+                agent["shelved"] = {"at": time.time(), "by": actor}
+            else:
+                agent.pop("shelved", None)
+            self._commit()
+            return {"session": session, "name": agent["name"], "shelved": bool(agent.get("shelved"))}
+
     def set_off(self, actor, session, on, reason=""):
         """下線：做完了、或視窗關了。下線的人不會被叫醒（不替他跑一輪、不花額度），訊息照留；
         回到線上時，留著的就一起補送。使用者、他所在房間的負責人、或本人可以切。
@@ -714,6 +741,8 @@ class Core:
                 self._commit()
                 return dict(agent)
             agent["off"] = {"at": time.time(), "by": actor, "reason": reason} if on else None
+            if not on:
+                agent.pop("shelved", None)                # 回到線上就從收起來裡拿出來
             if room:
                 self._emit(room["room_id"], "off" if on else "on", session, by=actor, by_name=self.name_of(actor),
                            reason=reason)
@@ -1015,7 +1044,7 @@ class Core:
                                "room_id": a.get("room_id"), "online": self._online(a), "dnd": a["dnd"],
                                "off": a.get("off"), "headless": bool(a.get("headless")),
                                "role": a.get("role", ""), "seen": a.get("listening_at") or 0,
-                               "delivery": a.get("delivery")})
+                               "delivery": a.get("delivery"), "shelved": a.get("shelved")})
             rooms = []
             for rid in self.state["rooms"]:
                 view = self._room_view(rid)

@@ -104,6 +104,8 @@ def make_handler(core, remote=False):
                 return core.set_role(actor, a["session"], a.get("role", ""))
             if method == "POST" and path == "/api/off":
                 return core.set_off(actor, a["session"], a.get("on") in (True, "1", "true", 1), a.get("reason", ""))
+            if method == "POST" and path == "/api/shelve":
+                return core.shelve(actor, a["session"], a.get("shelved") in (True, "1", "true", 1))
             if method == "POST" and path == "/api/desk":
                 return core.desk(actor, a["session"])
             if method == "POST" and path == "/api/keys":
@@ -144,7 +146,7 @@ def make_handler(core, remote=False):
                 if sub == "owner" and method == "POST":
                     return core.set_owner(actor, room_id, a["session"])
                 if sub == "delete" and method == "POST":
-                    return core.delete_room(actor, room_id)
+                    return core.delete_room(actor, room_id, evict=a.get("evict") in (True, 1, "1", "true"))
                 if sub == "hops" and method == "POST":
                     return core.set_hops(actor, room_id, a.get("limit", 0))
                 if sub == "resume" and method == "POST":

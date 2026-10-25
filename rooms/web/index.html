@@ -35,6 +35,18 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
   cursor: grab; white-space: nowrap; font-size: 12px; user-select: none; touch-action: none; }
 .lchip i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 .bubble.fixed { position: fixed; z-index: 21; }
+.tchip { border: 1px solid var(--line); color: var(--dim); border-radius: 14px; padding: 2px 12px; cursor: pointer; white-space: nowrap; }
+.tchip:hover { color: var(--text); }
+.tidy-pop { width: min(370px, calc(100vw - 16px)); }
+.tidy-list { max-height: min(60vh, 520px); overflow: auto; }
+.tidy-h { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; color: var(--dim); font-size: 12px; }
+.tidy-h button { margin-left: auto; font-size: 11px; padding: 1px 8px; }
+.tidy-h button + button { margin-left: 0; }
+.tidy-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px solid var(--line); }
+.tidy-row .who { flex: 1; min-width: 0; cursor: grab; touch-action: none; }
+.tidy-row .who b { display: block; font-weight: 600; }
+.tidy-row .who small { display: block; color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tidy-row button { font-size: 11px; padding: 1px 8px; }
 #stage { position: fixed; top: 44px; left: 0; right: 0; bottom: 96px; overflow: hidden; touch-action: none; cursor: grab; }
 #stage.panning { cursor: grabbing; }
 #world { position: absolute; left: 0; top: 0; width: 2600px; height: 1700px; transform-origin: 0 0; }
@@ -117,7 +129,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
   <button id="newRoom">＋ 開房間</button>
   <button id="fit" title="把所有房間放進畫面">全部看得到</button>
   <div id="outside"></div>
-  <span class="hint" title="滾輪縮放、拖空白處移動畫面&#10;點房間的頂面選它，拖房名搬房間&#10;拖點換房：拖到 ★ 換負責人，拖離 ★ 卸任，拖到上面的狀態列就是離開房間&#10;點常駐／維修進入跟它講話的模式，再點一下離開&#10;Esc 關最上層">?</span>
+  <span class="hint" title="滾輪縮放、拖空白處移動畫面&#10;點房間的頂面選它，拖房名搬房間&#10;Shift＋左鍵選多間，拖其中一間就整組一起搬&#10;拖點換房：拖到 ★ 換負責人，拖離 ★ 卸任，拖到上面的狀態列就是離開房間&#10;點常駐／維修進入跟它講話的模式，再點一下離開&#10;Esc 關最上層">?</span>
 </div>
 <div id="stage"><div id="world"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg><div id="overlay"></div></div></div>
 <div id="roombar"></div>
@@ -196,7 +208,7 @@ function setupView() {
   });
   const lift = e => { const p = pts[e.pointerId]; if (!p) return;
     const wasClick = !p.held; delete pts[e.pointerId]; rebase(); stage.classList.remove("panning");
-    if (wasClick && !ids().length && (S.sel || S.mode)) { S.sel = null; render(); } };
+    if (wasClick && !ids().length && (S.sel || S.mode || S.multi.size)) { S.sel = null; S.multi.clear(); render(); } };
   addEventListener("pointerup", lift); addEventListener("pointercancel", lift);
   stage.addEventListener("auxclick", e => { if (e.button === 1) e.preventDefault(); });
   stage.addEventListener("wheel", e => { e.preventDefault(); zoomAt(e.deltaY > 0 ? 0.89 : 1.12, e.clientX, e.clientY); }, { passive: false });
@@ -305,7 +317,7 @@ function render() {
   for (const id of Object.keys(S.wins)) if (!S.ov.rooms.find(r => r.room_id === id)) closeWin(id);
 }
 function drawRoom(svg, overlay, r, [px, py]) {
-  const sel = S.sel === r.room_id;
+  const sel = S.sel === r.room_id || S.multi.has(r.room_id);
   const g = el("g", { transform: `translate(${px},${py})`, "data-room": r.room_id });
   const line = sel ? "var(--cube-sel)" : "var(--cube-line)";
   // 後面的牆和地板（淡）
@@ -325,7 +337,7 @@ function drawRoom(svg, overlay, r, [px, py]) {
   // 頂面：點它選房間
   const top = el("polygon", { points: pts([[0,0,H],[W,0,H],[W,D,H],[0,D,H]]), fill: sel ? "rgba(108,182,255,0.16)" : "rgba(108,182,255,0.06)",
     stroke: line, "stroke-width": sel ? 2 : 1, style: "cursor:pointer" });
-  top.addEventListener("pointerdown", e => startRoomDrag(e, r, px, py));
+  top.addEventListener("pointerdown", e => startRoomDrag(e, r));
   g.append(top);
   // 成員的點
   const others = r.members.filter(m => m.session !== r.owner && !m.off);
@@ -354,7 +366,7 @@ function drawRoom(svg, overlay, r, [px, py]) {
   const [lx, ly] = iso(0, 0, H);
   const flags = [r.paused ? "暫停中" : "", r.lit ? `亮燈 ${r.lit}` : ""].filter(Boolean).join("・");
   const label = el("text", { x: lx, y: ly - 26, class: "room-label", "text-anchor": "middle", text: `${r.name}` });
-  label.addEventListener("pointerdown", e => startRoomDrag(e, r, px, py));
+  label.addEventListener("pointerdown", e => startRoomDrag(e, r));
   g.append(label);
   g.append(el("text", { x: lx, y: ly - 11, class: "room-sub", "text-anchor": "middle",
     text: `${r.room_id}・${OWNER()} ${r.owner_name}${flags ? "・" + flags : ""}`, fill: r.paused ? "var(--warn)" : null }));
@@ -390,8 +402,13 @@ function drawOutside() {
     box.append(chip);
     if (desk) requestAnimationFrame(() => { const b = chip.getBoundingClientRect(); drawBubble(document.body, desk, b.left + 60, b.bottom + 52, true); });
   }
-  const day = Date.now() / 1000 - 86400;
-  const loose = agents().filter(a => !a.room_id && !(S.ov.globals || {})[a.session] && (a.online || a.seen > day));
+  const loose = agents().filter(a => !a.room_id && !(S.ov.globals || {})[a.session] && !a.off && !a.shelved);
+  const offN = offline().length;
+  if (offN) {
+    const tidy = el("span", { class: "tchip", "data-tidy": "1", title: "下線的人：叫回來、拖進房間、收起來", text: `下線 ${offN}` });
+    tidy.addEventListener("click", e => { e.stopPropagation(); tidyPanel(); });
+    box.append(el("span", { class: "sep" }), tidy);
+  }
   box.append(el("span", { class: "sep" }), el("span", { class: "loose-label", text: loose.length ? "沒進房：" : "沒進房：沒有" }));
   for (const a of loose) {
     const [state, color] = stateOf({ ...a, members: [] });
@@ -400,6 +417,74 @@ function drawOutside() {
     chip.addEventListener("pointerdown", e => startDotDrag(e, a, null));
     box.append(chip);
   }
+}
+
+// ── 整理下線的人 ─────────────────────────────────
+const offline = () => agents().filter(a => a.off && !(S.ov.globals || {})[a.session] && !a.shelved);
+function tidyPanel() {
+  if (S.tidyClose) return S.tidyClose();
+  const pop = el("div", { class: "pop tidy-pop" });
+  const layer = el("div", { style: "position:fixed;inset:0;z-index:39" });
+  layer.addEventListener("pointerdown", () => closeTop());
+  const roomName = id => ((S.ov.rooms.find(r => r.room_id === id) || {}).name || id);
+  const ago = t => { if (!t) return "沒聽過"; const h = (Date.now() / 1000 - t) / 3600;
+    return h < 1 ? `${Math.max(1, Math.round(h * 60))} 分鐘前` : h < 48 ? `${Math.round(h)} 小時前` : `${Math.round(h / 24)} 天前`; };
+  const call = (p, ok) => act(p, ok).then(fill);
+  const row = (a, ...btns) => {
+    const r = el("div", { class: "tidy-row", "data-session": a.session },
+      el("span", { class: "who" }, el("b", { text: a.name }), el("small", { text: `${a.kind === "codex" ? "Codex" : a.kind === "claude" ? "Claude" : a.kind}・${ago(a.seen)}${a.role ? "・" + a.role : ""}` })),
+      ...btns);
+    return r;
+  };
+  const btn = (text, fn) => el("button", { text, on: { click: e => { e.stopPropagation(); fn(); } } });
+  function fill() {
+    pop.replaceChildren();
+    const off = offline(), loose = off.filter(a => !a.room_id), inRoom = off.filter(a => a.room_id);
+    const shelved = agents().filter(a => a.shelved);
+    pop.append(el("div", { class: "name", text: `下線的人（${off.length}）` }),
+      el("div", { class: "sub", text: "拖名字進房間就是進房；收起來的不再出現在狀態列和 @ 名單，回到線上會自己拿出來" }));
+    const list = el("div", { class: "tidy-list" });
+    if (loose.length) {
+      list.append(el("div", { class: "tidy-h" }, document.createTextNode(`沒進房（${loose.length}）`),
+        btn("全部收起來", () => call(Promise.all(loose.map(a => api("POST", "/api/shelve", { session: a.session, shelved: 1 }))), `收起 ${loose.length} 個`))));
+      for (const a of loose.sort((x, y) => (y.seen || 0) - (x.seen || 0))) {
+        const r = row(a, btn("叫回來", () => call(api("POST", "/api/off", { session: a.session, on: 0 }), `${a.name} 回到線上`)),
+          btn("收起來", () => call(api("POST", "/api/shelve", { session: a.session, shelved: 1 }), `${a.name} 收起來了`)));
+        r.querySelector(".who").addEventListener("pointerdown", e => { closeTop(); startDotDrag(e, a, null); });
+        list.append(r);
+      }
+    }
+    const byRoom = {};
+    for (const a of inRoom) (byRoom[a.room_id] = byRoom[a.room_id] || []).push(a);
+    for (const [rid, ms] of Object.entries(byRoom)) {
+      const room = S.ov.rooms.find(r => r.room_id === rid);
+      const allOff = room && room.members.every(m => m.off);
+      list.append(el("div", { class: "tidy-h" }, document.createTextNode(`${roomName(rid)}（${rid}）下線 ${ms.length}`),
+        btn("全部移出", () => call(Promise.all(ms.map(a => api("POST", "/api/move", { session: a.session, room_id: "" }))), `${ms.length} 個移出 ${roomName(rid)}`)),
+        allOff && !room.desk ? btn("移出並刪房", () => { closeTop(); offerCleanup(room); }) : null));
+      for (const a of ms)
+        list.append(row(a, btn("叫回來", () => call(api("POST", "/api/off", { session: a.session, on: 0 }), `${a.name} 回到線上`)),
+          btn("移出", () => call(api("POST", "/api/move", { session: a.session, room_id: "" }), `${a.name} 移出 ${roomName(rid)}`))));
+    }
+    if (shelved.length) {
+      const open = S.tidyShelf;
+      const h = el("div", { class: "tidy-h", style: "cursor:pointer" }, document.createTextNode(`${open ? "▾" : "▸"} 收起來的（${shelved.length}）`));
+      h.addEventListener("click", () => { S.tidyShelf = !open; fill(); });
+      list.append(h);
+      if (open) for (const a of shelved.sort((x, y) => (y.seen || 0) - (x.seen || 0)))
+        list.append(row(a, btn("拿出來", () => call(api("POST", "/api/shelve", { session: a.session, shelved: 0 }), `${a.name} 拿出來了`))));
+    }
+    if (!list.children.length) list.append(el("div", { class: "sub", text: "沒有下線的人" }));
+    pop.append(list);
+  }
+  fill();
+  const anchor = document.querySelector("[data-tidy]");
+  const b = anchor ? anchor.getBoundingClientRect() : { left: 20, bottom: 44 };
+  pop.style.left = Math.max(8, Math.min(b.left, innerWidth - 380)) + "px"; pop.style.top = (b.bottom + 8) + "px";
+  document.body.append(layer, pop);
+  const id = pushLayer(() => { pop.remove(); layer.remove(); S.tidyClose = null; S.tidyFill = null; });
+  S.tidyClose = () => { S.layers = S.layers.filter(l => l.id !== id); pop.remove(); layer.remove(); S.tidyClose = null; S.tidyFill = null; };
+  S.tidyFill = fill;
 }
 
 // ── 泡泡與對話視窗 ───────────────────────────────
@@ -489,7 +574,15 @@ function dragWin(win) {
 }
 
 // ── 選房間、房間的操作 ───────────────────────────
-function selectRoom(id) { S.sel = S.sel === id ? null : id; if (S.sel) S.mode = null; render(); }
+function selectRoom(id) { S.multi.clear(); S.sel = S.sel === id ? null : id; if (S.sel) S.mode = null; render(); }
+S.multi = new Set();                                   // Shift＋左鍵選的房間，拖其中一間就一起搬
+function toggleMulti(id) {
+  if (!S.multi.size && S.sel) S.multi.add(S.sel);
+  S.multi.has(id) ? S.multi.delete(id) : S.multi.add(id);
+  S.sel = S.multi.size === 1 ? [...S.multi][0] : null;
+  if (S.multi.size <= 1) S.multi.clear();
+  S.mode = null; render();
+}
 function placeRoombar() {
   const bar = $("roombar"); bar.replaceChildren();
   if (!S.ov) return;
@@ -520,6 +613,7 @@ async function renameRoom(r) {
   if (name && name.trim()) act(api("POST", `/api/rooms/${r.room_id}/name`, { name: name.trim() }), "改好了");
 }
 async function deleteRoom(r) {
+  if (r.members.length && r.members.every(m => m.off)) return offerCleanup(r);
   if (r.members.length) { toast(`${r.name} 裡還有 ${r.members.length} 個人，先把點拖出去再刪`); return; }
   const yes = await dialog({ title: `刪掉 ${r.name}？`, text: "房間會消失，紀錄封存在 data/rooms/deleted/。", ok: "刪除", danger: true });
   if (yes) { S.sel = null; act(api("POST", `/api/rooms/${r.room_id}/delete`), "刪掉了"); }
@@ -534,19 +628,46 @@ async function newRoom() {
   if (res.pick) await api("POST", "/api/move", { session: res.pick, room_id: room.room_id }).catch(e => toast(e.message));
   toast(`開好了：${room.name}（${room.room_id}）`); S.sel = room.room_id; refresh();
 }
+// 房裡的人全部下線：跳確認框問要不要把人移出、刪房；按「留著」的那一組人就不再問
+async function offerCleanup(only) {
+  if (S.asking || (!only && (document.querySelector(".dialog") || S.dragging))) return;
+  const asked = store.get("cleanupAsked", {});
+  for (const r of only ? [only] : S.ov.rooms) {
+    if (r.desk || !r.members.length || r.members.some(m => !m.off)) continue;
+    const key = r.members.map(m => m.session).sort().join(",");
+    if (!only && asked[r.room_id] === key) continue;
+    S.asking = true;
+    const yes = await dialog({ title: `${r.name} 裡的人都下線了`, ok: "移出並刪房", cancel: "留著", danger: true,
+      text: `要把 ${r.members.map(m => m.name).join("、")} 移出房間，再刪掉 ${r.name}（${r.room_id}）嗎？紀錄封存在 data/rooms/deleted/。` });
+    S.asking = false;
+    if (yes) { if (S.sel === r.room_id) S.sel = null; S.multi.delete(r.room_id);
+      await act(api("POST", `/api/rooms/${r.room_id}/delete`, { evict: 1 }), `${r.name} 移出 ${r.members.length} 人、刪掉了`); }
+    else { asked[r.room_id] = key; store.set("cleanupAsked", asked); }
+    return;
+  }
+}
 async function act(promise, ok) { try { await promise; toast(ok); } catch (e) { toast(e.message); } refresh(); }
 
 // ── 拖拉：搬房間、換房、換負責人 ───────────────────
-function startRoomDrag(e, r, px, py) {
+function startRoomDrag(e, r) {
   e.preventDefault();
-  const sx = e.clientX, sy = e.clientY; let moved = false, dx = 0, dy = 0, frame = 0;
-  const g = document.querySelector(`[data-room="${r.room_id}"]`);
-  const bubble = document.querySelector(`.bubble[data-bubble="${r.room_id}"]`);
+  const had = S.multi.has(r.room_id);
+  if (e.shiftKey && !had) toggleMulti(r.room_id);                      // Shift 點到沒選的：先加進來，可以直接拖整組
+  const sx = e.clientX, sy = e.clientY, shift = e.shiftKey; let moved = false, dx = 0, dy = 0, frame = 0;
+  const list = rooms();
+  const ids = S.multi.has(r.room_id) ? [...S.multi] : [r.room_id];
+  const group = ids.map(id => list.find(x => x.room_id === id)).filter(Boolean).map(x => {
+    const [px, py] = roomPos(x, list.indexOf(x));
+    return { r: x, px, py, g: document.querySelector(`[data-room="${x.room_id}"]`),
+      bubble: document.querySelector(`.bubble[data-bubble="${x.room_id}"]`) };
+  });
   const k = S.view.k;
   S.dragging = true;
   const paint = () => { frame = 0;
-    g.setAttribute("transform", `translate(${px + dx},${py + dy})`);
-    if (bubble) bubble.style.transform = `translate(${dx}px,${dy}px)`; };
+    for (const it of group) {
+      if (it.g) it.g.setAttribute("transform", `translate(${it.px + dx},${it.py + dy})`);
+      if (it.bubble) it.bubble.style.transform = `translate(${dx}px,${dy}px)`;
+    } };
   const move = ev => { dx = (ev.clientX - sx) / k; dy = (ev.clientY - sy) / k;
     if (Math.abs(dx) + Math.abs(dy) > 4 / k) moved = true;
     if (moved && !frame) frame = requestAnimationFrame(paint); };        // 一格畫面只更新一次
@@ -554,11 +675,17 @@ function startRoomDrag(e, r, px, py) {
     removeEventListener("pointermove", move); removeEventListener("pointerup", up);
     if (frame) cancelAnimationFrame(frame);
     S.dragging = false;
-    if (!moved) { S.dirty = false; return selectRoom(r.room_id); }
-    const x = Math.max(0, px + (ev.clientX - sx) / k), y = Math.max(0, py + (ev.clientY - sy) / k);
-    S.pendingPos[r.room_id] = [x, y];
+    if (!moved) { S.dirty = false; if (shift) return had ? toggleMulti(r.room_id) : render(); return selectRoom(r.room_id); }
+    dx = (ev.clientX - sx) / k; dy = (ev.clientY - sy) / k;
+    // 整組一起位移，不讓任何一間跑到左上邊界外
+    const minX = Math.min(...group.map(it => it.px)), minY = Math.min(...group.map(it => it.py));
+    dx = Math.max(dx, -minX); dy = Math.max(dy, -minY);
+    for (const it of group) {
+      const x = it.px + dx, y = it.py + dy, id = it.r.room_id;
+      S.pendingPos[id] = [x, y];
+      api("POST", `/api/rooms/${id}/pos`, { x, y }).catch(err => { delete S.pendingPos[id]; toast(err.message); render(); });
+    }
     render();
-    api("POST", `/api/rooms/${r.room_id}/pos`, { x, y }).catch(err => { delete S.pendingPos[r.room_id]; toast(err.message); render(); });
   };
   addEventListener("pointermove", move); addEventListener("pointerup", up);
 }
@@ -685,7 +812,7 @@ function onInput() {
   const inRoom = agents().filter(a => a.room_id && !(S.ov.globals || {})[a.session] && !(S.ov.rooms.find(r => r.room_id === a.room_id) || {}).desk);
   inRoom.sort((a, b) => (!!a.off - !!b.off) || roomName(a.room_id).localeCompare(roomName(b.room_id)) || a.name.localeCompare(b.name));
   for (const a of inRoom) list.push({ name: a.name, hint: roomName(a.room_id) + (a.off ? "・下線" : ""), dim: !!a.off });
-  for (const a of agents().filter(a => !a.room_id && !(S.ov.globals || {})[a.session]))
+  for (const a of agents().filter(a => !a.room_id && !a.shelved && !(S.ov.globals || {})[a.session]))
     list.push({ name: a.name, hint: "沒進房・拖進房間才收得到", dim: true });
   list.push({ name: S.ov.user.id, hint: S.ov.user.name });
   const seen = new Set();
@@ -753,8 +880,11 @@ async function refresh() {
       if (!(r.room_id in seenSeq)) { seenSeq[r.room_id] = last ? last.seq : 0; first = true; }
     }
     if (first) store.set("seen", seenSeq);
+    for (const id of [...S.multi]) if (!S.ov.rooms.find(r => r.room_id === id)) S.multi.delete(id);
     render();
     if (firstLoad && !store.get("viewSet", false)) { fitAll(); store.set("viewSet", true); }
+    if (S.tidyFill) S.tidyFill();
+    offerCleanup();
     await Promise.all(Object.keys(S.wins).map(refreshWin));
   } catch (e) { toast("連不上核心：" + e.message); }
 }

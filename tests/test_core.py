@@ -37,6 +37,32 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(self.core.list_rooms(USER), [])
         self.assertEqual(len(list((self.core.data / "rooms" / "deleted").glob("*.jsonl"))), 1)
 
+    def test_delete_with_evict_only_when_everyone_is_off(self):
+        self.core.move(USER, "s-cx1", self.room)
+        self.core.set_off(USER, "s-claude", True)
+        with self.assertRaises(RoomError):
+            self.core.delete_room(USER, self.room, evict=True)              # codex-1 還在線上
+        self.core.set_off(USER, "s-cx1", True)
+        self.core.delete_room(USER, self.room, evict=True)
+        self.assertEqual(self.core.list_rooms(USER), [])
+        self.assertIsNone(self.core.state["agents"]["s-cx1"]["room_id"])
+
+    def test_shelve_offline_agents_and_unshelve_on_return(self):
+        with self.assertRaises(RoomError):
+            self.core.shelve(USER, "s-cx2", True)                           # 還沒下線
+        self.core.set_off(USER, "s-cx2", True)
+        with self.assertRaises(RoomError):
+            self.core.shelve("s-claude", "s-cx2", True)                     # 只有使用者或維修
+        self.core.shelve(USER, "s-cx2", True)
+        row = next(a for a in self.core.overview()["agents"] if a["session"] == "s-cx2")
+        self.assertTrue(row["shelved"])
+        self.core.set_off(USER, "s-cx2", False)                             # 叫回來就拿出來
+        row = next(a for a in self.core.overview()["agents"] if a["session"] == "s-cx2")
+        self.assertFalse(row["shelved"])
+        self.core.set_off(USER, "s-claude", True)
+        with self.assertRaises(RoomError):
+            self.core.shelve(USER, "s-claude", True)                        # 還在房裡
+
     def test_owner_or_user_renames_room(self):
         self.assertEqual(self.core.rename_room("s-claude", self.room, " 桌遊社 ")["name"], "桌遊社")
         self.assertEqual(self.core.rename_room(USER, self.room, "素材包")["name"], "素材包")

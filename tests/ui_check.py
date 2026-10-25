@@ -106,20 +106,20 @@ def center(selector):
         const b = n.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; }})()""")
 
 
-def mouse(kind, x, y):
-    ws.cdp("Input.dispatchMouseEvent", type=kind, x=x, y=y, button="left", clickCount=1)
+def mouse(kind, x, y, mods=0):
+    ws.cdp("Input.dispatchMouseEvent", type=kind, x=x, y=y, button="left", clickCount=1, modifiers=mods)
 
 
 def click(x, y):
     mouse("mousePressed", x, y); mouse("mouseReleased", x, y)
 
 
-def drag(a, b):
-    mouse("mouseMoved", *a); mouse("mousePressed", *a)
+def drag(a, b, mods=0):
+    mouse("mouseMoved", *a, mods); mouse("mousePressed", *a, mods)
     for k in range(1, 11):
-        mouse("mouseMoved", a[0] + (b[0] - a[0]) * k / 10, a[1] + (b[1] - a[1]) * k / 10)
+        mouse("mouseMoved", a[0] + (b[0] - a[0]) * k / 10, a[1] + (b[1] - a[1]) * k / 10, mods)
         time.sleep(0.03)
-    mouse("mouseReleased", *b)
+    mouse("mouseReleased", *b, mods)
     time.sleep(1.2)
 
 
@@ -266,6 +266,38 @@ try:
     names = js("[...document.querySelectorAll('#suggest div')].map(d => d.firstChild.textContent)") or []
     check("@ 名單有全部的人", all("@" + n in names for n in ("全部", "主持甲", "工人A", "工人B", "散客", "總管", "維修")))
     key("Escape"); js("document.getElementById('input').value=''")
+    # Shift＋左鍵選兩間，拖其中一間整組一起搬
+    js("Object.keys(S.wins).forEach(closeWin); S.mode = null; document.getElementById('fit').click()"); time.sleep(1.5)
+    def top_of(rid):
+        return js(f"""(() => {{ const g = document.querySelector('[data-room="{rid}"]'); const ps = g.querySelectorAll('polygon'); const p = ps[ps.length - 1];
+            const b = p.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height * 0.3]; }})()""")
+    pos0 = {rid: js(f"roomPos(S.ov.rooms.find(r => r.room_id === '{rid}'), rooms().findIndex(r => r.room_id === '{rid}'))") for rid in (r1, r2)}
+    t1 = top_of(r1); mouse("mouseMoved", *t1, 8); mouse("mousePressed", *t1, 8); mouse("mouseReleased", *t1, 8); time.sleep(0.5)
+    check("Shift 點一間：加進多選", js("S.multi.size") == 0 and js("S.sel") == r1 or js("S.multi.has('%s')" % r1))
+    t2 = top_of(r2); drag(t2, [t2[0] + 80, t2[1] + 40], 8); time.sleep(2.5)
+    pos1 = {r["room_id"]: r.get("pos") for r in call("GET", "/api/overview")["rooms"]}
+    moved = [round(pos1[rid][0] - pos0[rid][0]) for rid in (r1, r2)] + [round(pos1[rid][1] - pos0[rid][1]) for rid in (r1, r2)]
+    check("Shift 選兩間一起拖", moved[0] == moved[1] != 0 and moved[2] == moved[3] != 0)
+    click(1300, 720); time.sleep(0.5)
+    check("點空白處取消多選", js("S.multi.size") == 0)
+    # 下線的人：狀態列有「下線 N」，打開整理、收起來
+    call("POST", "/api/register", session="a5", kind="codex", name="閒人")
+    call("POST", "/api/off", session="a5", on=1); time.sleep(3.2)
+    check("狀態列出現下線整理", "下線" in (js("document.querySelector('[data-tidy]') && document.querySelector('[data-tidy]').textContent") or ""))
+    click(*center('[data-tidy]')); time.sleep(0.6)
+    check("整理區列出閒人", js("!!document.querySelector('.tidy-pop [data-session=\"a5\"]')"))
+    shot("下線整理")
+    js("[...document.querySelectorAll('.tidy-pop [data-session=\"a5\"] button')].find(b => b.textContent === '收起來').click()"); time.sleep(1.5)
+    check("收起來", next(a for a in call("GET", "/api/overview")["agents"] if a["session"] == "a5")["shelved"])
+    key("Escape"); time.sleep(0.4)
+    # 房裡的人全部下線：跳確認框，按了就移出並刪房
+    for m in call("GET", f"/api/rooms/{r2}")["members"]:
+        call("POST", "/api/off", session=m["session"], on=1)
+    time.sleep(3.2)
+    check("全部下線就跳確認框", "都下線了" in (js("document.querySelector('.dialog h3') && document.querySelector('.dialog h3').textContent") or ""))
+    shot("全部下線確認框")
+    js("[...document.querySelectorAll('.dialog button')].find(b => b.textContent === '移出並刪房').click()"); time.sleep(1.8)
+    check("確認後移出並刪房", all(r["room_id"] != r2 for r in call("GET", "/api/overview")["rooms"]))
     shot("結束")
 finally:
     chrome.terminate(); core.terminate()
