@@ -298,6 +298,10 @@ try:
     shot("全部下線確認框")
     js("[...document.querySelectorAll('.dialog button')].find(b => b.textContent === '移出並刪房').click()"); time.sleep(1.8)
     check("確認後移出並刪房", all(r["room_id"] != r2 for r in call("GET", "/api/overview")["rooms"]))
+    js("showBoard('%s'), 0" % r1); time.sleep(0.8)
+    check("白板框可以編輯", js("!!document.querySelector('.dialog textarea.board-edit')"))
+    js("document.querySelector('.dialog textarea').value = '規矩：先讀再做'; [...document.querySelectorAll('.dialog button')].pop().click()"); time.sleep(1.2)
+    check("白板存檔寫回核心", call("GET", "/api/rooms/%s/whiteboard" % r1) == "規矩：先讀再做")
     shot("結束")
 finally:
     chrome.terminate(); core.terminate()

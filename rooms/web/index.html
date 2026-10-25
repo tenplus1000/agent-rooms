@@ -97,6 +97,8 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 .dialog input, .dialog textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
   border-radius: 6px; padding: 7px 9px; font: inherit; margin-bottom: 10px; }
 .dialog .row { display: flex; gap: 8px; justify-content: flex-end; }
+.dialog.wide { width: min(720px, 94vw); }
+.dialog textarea.board-edit { height: 55vh; resize: vertical; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
 .pick { max-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; }
 .pick div { padding: 6px 9px; cursor: pointer; }
 .pick div:hover, .pick div.on { background: var(--panel2); color: var(--accent); }
@@ -559,8 +561,12 @@ function msgEl(e) {
   return el("div", { class: "msg sys", text: `${at}　${e.from_name} ${words[e.type] || e.type}` });
 }
 async function showBoard(roomId) {
-  const text = await api("GET", `/api/rooms/${roomId}/whiteboard`).catch(e => "（讀不到：" + e.message + "）");
-  dialog({ title: "白板", text: text || "（空的）", ok: "關閉", cancel: null, pre: true });
+  let text;
+  try { text = await api("GET", `/api/rooms/${roomId}/whiteboard`); }
+  catch (e) { return dialog({ title: "白板", text: "（讀不到：" + e.message + "）", ok: "關閉", cancel: null }); }
+  const next = await dialog({ title: "白板", area: "（空的）寫下這間房的規矩與現況", value: text || "", ok: "存檔" });
+  if (next === null || next === (text || "")) return;
+  act(api("POST", `/api/rooms/${roomId}/whiteboard`, { text: next }), "白板存好了");
 }
 function dragWin(win) {
   const head = win.querySelector("header");
@@ -842,13 +848,14 @@ function pickSuggest(n) {
 function insertAt(n) { const inp = $("input"); inp.value = (inp.value ? inp.value.trimEnd() + " " : "") + "@" + n + " "; inp.focus(); }
 
 // ── 自製的對話框（不用瀏覽器內建的）─────────────
-function dialog({ title, text, input, value = "", ok = "好", cancel = "取消", danger, pick, pre }) {
+function dialog({ title, text, input, area, value = "", ok = "好", cancel = "取消", danger, pick, pre }) {
   return new Promise(resolve => {
     let chosen = null;
     const box = el("div", { class: "dialog" }, el("h3", { text: title }));
     if (text) box.append(el("p", { text, style: pre ? "white-space:pre-wrap;max-height:50vh;overflow:auto;color:var(--text)" : null }));
     let field = null;
     if (input) { field = el("input", { placeholder: input }); field.value = value; box.append(field); }
+    if (area) { input = area; field = el("textarea", { placeholder: area, class: "board-edit" }); field.value = value; box.append(field); box.classList.add("wide"); }
     if (pick) {
       box.append(el("p", { text: typeof pick.label === "function" ? pick.label() : pick.label, style: "margin:0 0 4px" }));
       const list = el("div", { class: "pick" });
@@ -866,7 +873,7 @@ function dialog({ title, text, input, value = "", ok = "好", cancel = "取消",
     layer.addEventListener("pointerdown", e => { if (e.target === layer) done(input ? null : false); });
     document.body.append(layer);
     const id = pushLayer(() => done(input ? null : false));
-    if (field) { field.focus(); field.addEventListener("keydown", e => { if (e.key === "Enter") row.lastChild.click(); }); }
+    if (field) { field.focus(); if (!area) field.addEventListener("keydown", e => { if (e.key === "Enter") row.lastChild.click(); }); }
   });
 }
 let layerSeq = 0;
