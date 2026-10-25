@@ -548,12 +548,35 @@ class Core:
                 agent["shelve_hint"] = {"key": key, "error": error, "at": time.time()}
             else:
                 why = (agent.get("off") or {}).get("reason") or evidence.get("objective") or evidence.get("last") or agent.get("role") or ""
-                agent["shelve_hint"] = {"key": key, "at": time.time(), "done": round(probs["done"], 3),
+                agent["shelve_hint"] = {"key": key, "at": time.time(), "state": state, "done": round(probs["done"], 3),
                                         "pending": round(probs["pending"], 3),
                                         "suggest": probs["done"] >= judge.THRESHOLD and probs["pending"] < judge.THRESHOLD,
                                         "why": why[:120]}
             self._commit()
             return agent["shelve_hint"]
+
+    def _shelve_label(self, session, label, actor):
+        """使用者對判官建議的處置就是標註：收起來＝判對（不用再叫回來），留著＝判錯，拿出來＝反悔。
+        沒動作的不記（還沒確定）。每筆附判官當時看到的內容與機率，之後換模型或訓練時用。"""
+        agent = self.state["agents"][session]
+        hint = agent.get("shelve_hint") or {}
+        row = {"at": _now(), "session": session, "name": agent["name"], "label": label, "by": actor,
+               "suggested": hint.get("suggest"), "done": hint.get("done"), "pending": hint.get("pending"),
+               "judged_at": hint.get("at"), "state": hint.get("state") or self._judged_state(agent["name"])}
+        with (self.data / "shelve_labels.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def _judged_state(self, name):
+        """舊的建議沒存判官看到的內容：從 judge.jsonl 找最後一次判這個名字的那一發。"""
+        found = None
+        try:
+            with (self.data / "judge.jsonl").open(encoding="utf-8") as fh:
+                for line in fh:
+                    if '"shelve"' in line and f"對話「{name}」" in line:
+                        found = json.loads(line).get("state")
+        except (OSError, ValueError):
+            pass
+        return found
 
     def keep_shelve_hint(self, actor, session):
         """使用者說留著：這次下線不再建議收起（下次再下線會重新判）。"""
@@ -562,6 +585,7 @@ class Core:
         with self.cond:
             hint = self._agent(session).get("shelve_hint")
             if hint:
+                self._shelve_label(session, "kept", actor)
                 hint.update(suggest=False, kept=time.time())
                 self._commit()
             return hint
@@ -853,8 +877,12 @@ class Core:
                     raise RoomError(f"{agent['name']} 還沒下線，先下線再收")
                 if agent.get("room_id"):
                     raise RoomError(f"{agent['name']} 還在 {agent['room_id']}，先移出房間再收")
+                if not agent.get("shelved"):
+                    self._shelve_label(session, "shelved", actor)
                 agent["shelved"] = {"at": time.time(), "by": actor}
             else:
+                if agent.get("shelved"):
+                    self._shelve_label(session, "unshelved", actor)
                 agent.pop("shelved", None)
             self._commit()
             return {"session": session, "name": agent["name"], "shelved": bool(agent.get("shelved"))}

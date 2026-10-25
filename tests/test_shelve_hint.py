@@ -52,6 +52,27 @@ class ShelveHintTest(unittest.TestCase):
         self.assertFalse(row["shelve_hint"]["suggest"])
 
 
+class ShelveLabelTest(ShelveHintTest):
+    def labels(self):
+        path = Path(self._tmp.name, "shelve_labels.jsonl")
+        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+    def test_users_choice_is_recorded_with_what_the_judge_saw(self):
+        self.judge({"done": 0.9, "pending": 0.1})
+        self.assertEqual(self.labels(), [])                                 # 還沒動作：不記
+        self.core.shelve(USER, "s-1", True)
+        row = self.labels()[0]
+        self.assertEqual((row["label"], row["suggested"], row["done"]), ("shelved", True, 0.9))
+        self.assertIn("766 包交件", row["state"])
+        self.core.shelve(USER, "s-1", False)
+        self.assertEqual([r["label"] for r in self.labels()], ["shelved", "unshelved"])
+
+    def test_keep_is_recorded_as_judge_wrong(self):
+        self.judge({"done": 0.9, "pending": 0.1})
+        self.core.keep_shelve_hint(USER, "s-1")
+        self.assertEqual([r["label"] for r in self.labels()], ["kept"])
+
+
 class LastWordsTest(unittest.TestCase):
     """從主機上的對話紀錄拿最後一段 agent 說的話（Codex rollout、Claude transcript）。"""
 
