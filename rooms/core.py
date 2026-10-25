@@ -243,6 +243,48 @@ class Core:
             self._commit()
             return {"room_id": room_id, "deleted": room["name"]}
 
+    def set_room_pos(self, actor, room_id, x, y):
+        """畫面上房間擺在哪（使用者、全域角色或負責人拖的）。"""
+        with self.cond:
+            if not self._is_room_owner(actor, room_id):
+                raise RoomError("只有使用者、全域角色或負責人能搬房間", 403)
+            self._room(room_id)["pos"] = [float(x), float(y)]
+            self._commit()
+            return {"room_id": room_id, "pos": self.state["rooms"][room_id]["pos"]}
+
+    def set_owner(self, actor, room_id, session):
+        """換負責人（主持）：使用者或全域角色；新的負責人要在房裡。"""
+        with self.cond:
+            if not self._admin(actor):
+                raise RoomError("只有使用者或全域角色能換負責人", 403)
+            room = self._room(room_id)
+            if session != USER and session not in self._members(room_id):
+                raise RoomError(f"{self.name_of(session)} 不在這間房，先把他移進來")
+            before = room["owner"]
+            room["owner"] = session
+            self._emit(room_id, "owner", actor, owner=session, owner_name=self.name_of(session),
+                       before_name=self.name_of(before), wake=[session] if session not in (actor, USER) else [])
+            self._commit()
+            return self._room_view(room_id)
+
+    def desk(self, actor, session):
+        """全域角色的專屬管道：使用者不選任何房間時跟它講話的地方。第一次用才開，之後都是同一間。"""
+        with self.cond:
+            if session not in self._globals():
+                raise RoomError(f"{self.name_of(session)} 不是全域角色")
+            if actor not in (USER, session):
+                raise RoomError("只有使用者和那個全域角色本人能用它的專屬管道", 403)
+            for room_id, room in self.state["rooms"].items():
+                if room.get("desk") == session:
+                    return dict(room)
+            room_id = self._next("room", "R")
+            self.state["rooms"][room_id] = {"room_id": room_id, "name": f"{self.name_of(session)} 的專屬管道",
+                                            "owner": USER, "created_at": _now(), "whiteboard": "", "desk": session}
+            self.events[room_id] = []
+            self._emit(room_id, "room_created", actor, name=self.state["rooms"][room_id]["name"])
+            self._commit()
+            return dict(self.state["rooms"][room_id])
+
     def rename_room(self, actor, room_id, name):
         """改房名：負責人或使用者。"""
         if not name.strip():
@@ -427,6 +469,9 @@ class Core:
             members = [m for m in self._members(room_id) if m != actor]
             everyone = any(n.lower() in EVERYONE for n in MENTION.findall(text))
             wake = [m for m in members if everyone or m in mentions]
+            desk = room.get("desk")
+            if desk and actor != desk and desk not in wake:
+                wake.append(desk)                     # 專屬管道：使用者講的話都是給那個全域角色的
             for sid in self._globals():
                 if sid in mentions and sid not in members and sid != actor:
                     wake.append(sid)                  # 全域角色不在房裡，@ 它照樣叫醒
@@ -938,6 +983,7 @@ class Core:
                 agents.append({"session": sid, "name": a["name"], "kind": a["kind"],
                                "room_id": a.get("room_id"), "online": self._online(a), "dnd": a["dnd"],
                                "off": a.get("off"), "headless": bool(a.get("headless")),
+                               "role": a.get("role", ""), "seen": a.get("listening_at") or 0,
                                "delivery": a.get("delivery")})
             rooms = []
             for rid in self.state["rooms"]:
@@ -947,5 +993,6 @@ class Core:
                                    "text": (e.get("text") or e.get("detail") or "")[:120]} for e in posts[-3:]]
                 view["last_at"] = (self.events.get(rid) or [{}])[-1].get("at")
                 rooms.append(view)
-            return {"rooms": rooms, "agents": agents, "globals": dict(self._globals())}
+            return {"rooms": rooms, "agents": agents, "globals": dict(self._globals()),
+                    "user": {"id": USER, "name": USER_NAME}}
 

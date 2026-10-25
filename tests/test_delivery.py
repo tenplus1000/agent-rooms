@@ -233,6 +233,27 @@ class WakeTest(unittest.TestCase):
         self.core.set_global(USER, "s-m", "")
         self.assertNotIn("s-m", self.core.post("s-a", self.room, "@維修 在嗎")["wake"])  # 取消後叫不到
 
+    def test_desk_is_a_private_line_to_a_global_role(self):
+        m = self.keeper()
+        desk = self.core.desk(USER, m)
+        self.assertEqual(self.core.desk(USER, m)["room_id"], desk["room_id"])   # 同一間
+        event = self.core.post(USER, desk["room_id"], "幫我看一下 R1")
+        self.assertEqual(event["wake"], [m])
+        self.assertEqual(self.core.post(m, desk["room_id"], "看完了")["wake"], [])  # 它回話不用叫誰
+        with self.assertRaises(Exception):
+            self.core.desk("s-a", m)
+
+    def test_owner_and_position_are_set_from_the_screen(self):
+        self.core.set_room_pos(USER, self.room, 120, 80)
+        self.assertEqual(self.core.room(USER, self.room)["pos"], [120.0, 80.0])
+        self.core.set_owner(USER, self.room, "s-a")
+        self.assertEqual(self.core.room(USER, self.room)["owner"], "s-a")
+        with self.assertRaises(Exception):
+            self.core.set_owner("s-b", self.room, "s-b")                    # 成員不能自己當主持
+        self.core.register("s-x", "codex", "外人")
+        with self.assertRaises(Exception):
+            self.core.set_owner(USER, self.room, "s-x")                     # 不在房裡
+
     def test_resume_clears_the_pause(self):
         self.pause()
         self.assertTrue(self.core.resume("s-boss", self.room)["resumed"])

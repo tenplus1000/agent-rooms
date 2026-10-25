@@ -104,6 +104,8 @@ def make_handler(core, remote=False):
                 return core.set_role(actor, a["session"], a.get("role", ""))
             if method == "POST" and path == "/api/off":
                 return core.set_off(actor, a["session"], a.get("on") in (True, "1", "true", 1), a.get("reason", ""))
+            if method == "POST" and path == "/api/desk":
+                return core.desk(actor, a["session"])
             if method == "POST" and path == "/api/keys":
                 if a.get("revoke") in (True, "1", "true", 1):
                     return core.revoke_keys(actor, a["identity"])
@@ -137,6 +139,10 @@ def make_handler(core, remote=False):
                 room_id, sub = m.groups()
                 if sub is None and method == "GET":
                     return core.room(actor, room_id)
+                if sub == "pos" and method == "POST":
+                    return core.set_room_pos(actor, room_id, a["x"], a["y"])
+                if sub == "owner" and method == "POST":
+                    return core.set_owner(actor, room_id, a["session"])
                 if sub == "delete" and method == "POST":
                     return core.delete_room(actor, room_id)
                 if sub == "resume" and method == "POST":

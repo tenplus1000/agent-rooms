@@ -97,6 +97,8 @@ def line_for(event, room_name):
         return head + f"下線了（{event['by_name']} 標的{why}），不會被叫醒，訊息留著"
     if kind == "on":
         return head + "回到線上"
+    if kind == "owner":
+        return head + f"把負責人從 {event.get('before_name', '?')} 換成 {event['owner_name']}"
     if kind == "paused":
         return head + event["text"]
     if kind == "room_created":
