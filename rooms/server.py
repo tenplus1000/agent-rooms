@@ -44,6 +44,7 @@ def make_handler(core, remote=False):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")      # 頁面改了，重新整理就要拿到新的
             self.end_headers()
             self.wfile.write(body)
 

@@ -10,6 +10,8 @@ After=default.target
 ExecStart=%h/agent-rooms/bin/rooms-dispatch
 Restart=always
 RestartSec=10
+# 重啟只停轉送程式本身：背景 Claude 成員正在跑的那一輪（自己的 session）不跟著被砍
+KillMode=process
 StandardOutput=append:%h/agent-rooms/data/dispatch.log
 StandardError=append:%h/agent-rooms/data/dispatch.log
 

@@ -588,6 +588,18 @@ def quota_reset(text, now=None):
     return at.timestamp() + 60                      # 多等一分鐘，別剛好卡在邊上
 
 
+def claude_running(session):
+    """這個成員上一輪的 claude -p 還在跑嗎（轉送程式重啟時不砍它，新的轉送程式要等它跑完）。"""
+    try:
+        with open(os.path.join(CLAUDE_MEMBERS, "running", session + ".pid")) as fh:
+            pid = int(fh.read().strip() or 0)
+        os.kill(pid, 0)
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return session.encode() in fh.read()
+    except (OSError, ValueError):
+        return False
+
+
 def claude_started(member, session):
     """這個對話開過了沒：看那個帳號的紀錄裡有沒有它（第一輪撞額度失敗時，對話其實已經建好了）。"""
     return member.get("started") or bool(glob.glob(os.path.join(member["home"], "projects", "*", session + ".jsonl")))
@@ -604,6 +616,9 @@ class HeadlessClaudeWorker(Worker):
                 got = call("GET", "/api/listen", session=self.session, wait=30, triggers_only=1,
                            consume=0, heartbeat=0)
                 if not got["events"] or self.stop:
+                    continue
+                if claude_running(self.session):
+                    time.sleep(15)              # 上一輪還在跑（轉送程式重啟前開的）：跑完才送下一批
                     continue
                 wait = quota_until(claude_member(self.session)["account"]) - time.time()
                 if wait > 0:
@@ -635,15 +650,27 @@ class HeadlessClaudeWorker(Worker):
         env.pop("CLAUDE_CONFIG_DIR", None)
         if os.path.realpath(member["home"]) != os.path.realpath(os.path.expanduser("~/.claude")):
             env["CLAUDE_CONFIG_DIR"] = member["home"]     # 預設帳號不設：設了它會改到那個資料夾裡找 .claude.json
-        # 跑完才推進游標：撞到額度上限時這一批留著，重置後補送；其他失敗照樣推進、不自動重送
+        # 先推進游標再跑（轉送程式重啟時這一輪不會被砍，也不會重送）；撞到額度上限才倒回，重置後補送
+        call("POST", "/api/ack", session=self.session, room_id=room_id, seq=events[-1]["seq"])
         call("POST", "/api/touch", session=self.session)
         self.last_sent = time.time()
         self.sent.append(self.last_sent)
         self.note("turn", f"背景跑 claude -p（{member['account']}）送了 {len(events)} 則（到 #{events[-1]['seq']}）")
         os.makedirs(os.path.join(CLAUDE_MEMBERS, "logs"), exist_ok=True)
         with open(os.path.join(CLAUDE_MEMBERS, "logs", self.session + ".jsonl"), "a", encoding="utf-8") as out:
-            done = subprocess.run(args + [text], cwd=member["cwd"], env=env, stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # 自己一個 session：轉送程式重啟（systemd 只停主程式）時不會被一起砍掉
+            proc = subprocess.Popen(args + [text], cwd=member["cwd"], env=env, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            running = os.path.join(CLAUDE_MEMBERS, "running", self.session + ".pid")
+            os.makedirs(os.path.dirname(running), exist_ok=True)
+            with open(running, "w") as fh:
+                fh.write(str(proc.pid))
+            stdout, stderr = proc.communicate()
+            done = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
+            try:
+                os.remove(running)
+            except OSError:
+                pass
             out.write(json.dumps({"at": time.time(), "seq": events[-1]["seq"], "code": done.returncode,
                                   "output": done.stdout[-20000:], "stderr": done.stderr[-5000:]}, ensure_ascii=False) + "\n")
         try:
@@ -659,10 +686,10 @@ class HeadlessClaudeWorker(Worker):
         if (done.returncode or result.get("is_error")) and QUOTA_HIT in said:
             until = quota_reset(said)
             quota_until(member["account"], until)
+            call("POST", "/api/rewind", session=self.session, room_id=room_id, seq=events[0]["seq"] - 1)
             at = datetime.datetime.fromtimestamp(until).astimezone().strftime("%H:%M")
             self.fail("quota_wait", f"{member['account']} 的額度用完了，這一批留著，約 {at} 重置後自動補送", events)
             return
-        call("POST", "/api/ack", session=self.session, room_id=room_id, seq=events[-1]["seq"])
         if done.returncode or result.get("is_error"):
             self.fail("failed_after", f"那一輪沒跑完（{str(result.get('result') or '')[:200]}）；"
                       f"訊息已送過不重送，可用 {claude_member_hint(self.session, member)} 接上看", events)

@@ -79,7 +79,7 @@ sys.exit(1 if fail else 0)
         session, home = dispatch.spawn_claude(str(self.work), "c2")
         os.environ["FAKE_FAIL"] = "limit"
         dispatch.HeadlessClaudeWorker(session).turn("R1", [{"seq": 4, "from": "u", "wake": [session]}])
-        self.assertFalse([kw for p, kw in self.posts if p == "/api/ack"])        # 這一批留著
+        self.assertEqual([kw["seq"] for p, kw in self.posts if p == "/api/rewind"], [3])   # 倒回這一批之前，重置後補送
         self.assertTrue(any(p == "/api/delivery" and kw["action"] == "quota_wait" for p, kw in self.posts))
         self.assertGreater(dispatch.quota_until("c2"), 0)
         os.environ.pop("FAKE_FAIL")

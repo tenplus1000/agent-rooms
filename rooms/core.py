@@ -965,7 +965,7 @@ class Core:
 
     def rewind(self, actor, session, room_id, seq):
         """把游標倒回 seq（使用者或全域角色用）：轉送程式誤把沒跑成的一批記成送到時，讓那一批重送。"""
-        if not self._admin(actor):
+        if actor and not self._admin(actor):          # 沒帶身分＝本機的轉送程式（撞額度時倒回那一批）
             raise RoomError("只有使用者或全域角色能倒回游標", 403)
         with self.cond:
             agent = self._agent(session)
