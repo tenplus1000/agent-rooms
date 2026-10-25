@@ -628,23 +628,27 @@ async function newRoom() {
   if (res.pick) await api("POST", "/api/move", { session: res.pick, room_id: room.room_id }).catch(e => toast(e.message));
   toast(`開好了：${room.name}（${room.room_id}）`); S.sel = room.room_id; refresh();
 }
-// 房裡的人全部下線：跳確認框問要不要把人移出、刪房；按「留著」的那一組人就不再問
+// 房裡的人全部下線：跳一個確認框問要不要把人移出、刪房（好幾間就一起問一次）；按「留著」的那一組人就不再問
 async function offerCleanup(only) {
   if (S.asking || (!only && (document.querySelector(".dialog") || S.dragging))) return;
   const asked = store.get("cleanupAsked", {});
-  for (const r of only ? [only] : S.ov.rooms) {
-    if (r.desk || !r.members.length || r.members.some(m => !m.off)) continue;
-    const key = r.members.map(m => m.session).sort().join(",");
-    if (!only && asked[r.room_id] === key) continue;
-    S.asking = true;
-    const yes = await dialog({ title: `${r.name} 裡的人都下線了`, ok: "移出並刪房", cancel: "留著", danger: true,
-      text: `要把 ${r.members.map(m => m.name).join("、")} 移出房間，再刪掉 ${r.name}（${r.room_id}）嗎？紀錄封存在 data/rooms/deleted/。` });
-    S.asking = false;
-    if (yes) { if (S.sel === r.room_id) S.sel = null; S.multi.delete(r.room_id);
-      await act(api("POST", `/api/rooms/${r.room_id}/delete`, { evict: 1 }), `${r.name} 移出 ${r.members.length} 人、刪掉了`); }
-    else { asked[r.room_id] = key; store.set("cleanupAsked", asked); }
-    return;
-  }
+  const keyOf = r => r.members.map(m => m.session).sort().join(",");
+  const list = (only ? [only] : S.ov.rooms).filter(r => !r.desk && r.members.length && r.members.every(m => m.off)
+    && (only || asked[r.room_id] !== keyOf(r)));
+  if (!list.length) return;
+  S.asking = true;
+  const one = list.length === 1 && list[0];
+  const yes = await dialog({ title: one ? `${one.name} 裡的人都下線了` : `${list.length} 間房裡的人都下線了`,
+    ok: one ? "移出並刪房" : "全部移出並刪房", cancel: "留著", danger: true, pre: !one,
+    text: one ? `要把 ${one.members.map(m => m.name).join("、")} 移出房間，再刪掉 ${one.name}（${one.room_id}）嗎？紀錄封存在 data/rooms/deleted/。`
+      : list.map(r => `${r.name}（${r.room_id}）：${r.members.map(m => m.name).join("、")}`).join("\n")
+        + "\n\n要把這些人移出房間、刪掉這幾間嗎？紀錄封存在 data/rooms/deleted/。" });
+  S.asking = false;
+  if (yes) {
+    for (const r of list) { if (S.sel === r.room_id) S.sel = null; S.multi.delete(r.room_id); }
+    await act(Promise.all(list.map(r => api("POST", `/api/rooms/${r.room_id}/delete`, { evict: 1 }))),
+      one ? `${one.name} 移出 ${one.members.length} 人、刪掉了` : `刪掉 ${list.length} 間房`);
+  } else { for (const r of list) asked[r.room_id] = keyOf(r); store.set("cleanupAsked", asked); }
 }
 async function act(promise, ok) { try { await promise; toast(ok); } catch (e) { toast(e.message); } refresh(); }
 

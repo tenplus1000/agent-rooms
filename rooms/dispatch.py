@@ -413,6 +413,15 @@ def claude_alive(session):
                 return True
         except (OSError, ValueError, KeyError, IndexError):
             continue
+    # 剛開的視窗停在啟動畫面（例如信任資料夾的確認）時還沒登記，但程式已經在了
+    for cmdline in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            with open(cmdline, "rb") as fh:
+                args = fh.read().split(b"\0")
+        except OSError:
+            continue
+        if b"--resume" in args and session.encode() in args and any(a.endswith(b"claude") for a in args[:2]):
+            return True
     return False
 
 
@@ -466,7 +475,7 @@ class ClaudeWorker(Worker):
     """替房裡的 Claude 盯著：平常什麼都不做（hook 會處理）；視窗關了又有人找它才開視窗接回。"""
 
     def run(self):
-        opened = 0
+        opened, opened_seq = 0, 0
         while not self.stop:
             try:
                 got = call("GET", "/api/listen", session=self.session, wait=30, triggers_only=1,
@@ -476,11 +485,16 @@ class ClaudeWorker(Worker):
                 if claude_alive(self.session):
                     time.sleep(15)              # 開著：Stop／PostToolUse hook 會送，這裡不插手
                     continue
+                events = got["events"]
                 if time.time() - opened < REOPEN_GAP:
                     time.sleep(15)
                     continue
+                if opened_seq and events[-1]["seq"] <= opened_seq:
+                    # 同一批已經開過一次視窗，沒接起來（被關掉、或沒按確認）：不再一直開，等有新的事再說
+                    self.fail("reopen_failed", "開過視窗接回對話，但它沒有接起來（視窗被關掉、或停在確認畫面）；訊息留著，有新的事再開", events)
+                    time.sleep(60)
+                    continue
                 found = claude_transcript(self.session)
-                events = got["events"]
                 if not found:
                     time.sleep(60)              # 不在這台的紀錄裡（例如 Windows 桌面版）：交給它那邊的 hook
                     continue
@@ -490,7 +504,7 @@ class ClaudeWorker(Worker):
                     self.fail("desktop_closed", f"視窗關了，{why}；訊息留著", events)
                     time.sleep(BACKOFF["desktop_closed"])
                     continue
-                opened = time.time()
+                opened, opened_seq = time.time(), events[-1]["seq"]
                 self.reported = None
                 self.note("reopen", f"視窗關了，開新視窗接回這個對話（{len(events)} 則等著）")
             except Exception as error:
