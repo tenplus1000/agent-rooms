@@ -95,7 +95,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 .pop .acts { display: flex; flex-wrap: wrap; gap: 6px; }
 #roombar { position: fixed; z-index: 15; display: none; gap: 6px; }
 #suggest { position: fixed; bottom: 92px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; z-index: 25;
-  display: none; max-height: 220px; overflow: auto; min-width: 200px; }
+  display: none; max-height: 320px; overflow: auto; min-width: 260px; }
 #suggest div { padding: 5px 10px; cursor: pointer; }
 #suggest div.on, #suggest div:hover { background: var(--panel2); color: var(--accent); }
 #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 108px; background: var(--panel2); border: 1px solid var(--line);
@@ -677,17 +677,29 @@ function onInput() {
   const v = $("input").value, pos = $("input").selectionStart;
   const m = v.slice(0, pos).match(/@([\w\-.㐀-鿿]*)$/);
   if (!m) return hideSuggest();
-  const q = m[1];
-  const names = [...new Set([...agents().filter(a => a.room_id).map(a => a.name), ...globals().map(callOf), S.ov.user.id])];
-  sugg = names.filter(n => n.includes(q)).slice(0, 12);
+  const q = m[1].toLowerCase();
+  // 全部的人：@全部、全域角色、各房的人（在線的先、下線的後）、沒進房的；可以捲動
+  const roomName = id => ((S.ov.rooms.find(r => r.room_id === id) || {}).name || id);
+  const list = [{ name: "全部", hint: "這間房的每個人" }];
+  for (const g of globals()) list.push({ name: callOf(g), hint: g.kind === "maintainer" ? "維修" : "常駐" });
+  const inRoom = agents().filter(a => a.room_id && !(S.ov.globals || {})[a.session] && !(S.ov.rooms.find(r => r.room_id === a.room_id) || {}).desk);
+  inRoom.sort((a, b) => (!!a.off - !!b.off) || roomName(a.room_id).localeCompare(roomName(b.room_id)) || a.name.localeCompare(b.name));
+  for (const a of inRoom) list.push({ name: a.name, hint: roomName(a.room_id) + (a.off ? "・下線" : ""), dim: !!a.off });
+  for (const a of agents().filter(a => !a.room_id && !(S.ov.globals || {})[a.session]))
+    list.push({ name: a.name, hint: "沒進房・拖進房間才收得到", dim: true });
+  list.push({ name: S.ov.user.id, hint: S.ov.user.name });
+  const seen = new Set();
+  sugg = list.filter(x => x.name.toLowerCase().includes(q) && !seen.has(x.name) && seen.add(x.name));
   if (!sugg.length) return hideSuggest();
   suggOn = 0; showSuggest();
 }
 function showSuggest() {
   const box = $("suggest"); box.replaceChildren();
-  sugg.forEach((n, i) => box.append(el("div", { class: i === suggOn ? "on" : "", text: "@" + n,
-    on: { pointerdown: e => { e.preventDefault(); pickSuggest(n); } } })));
+  sugg.forEach((x, i) => box.append(el("div", { class: i === suggOn ? "on" : "", style: x.dim ? "opacity:.6" : null,
+    on: { pointerdown: e => { e.preventDefault(); pickSuggest(x.name); } } },
+    document.createTextNode("@" + x.name), el("span", { text: "　" + x.hint, style: "color:var(--dim);font-size:11px" }))));
   box.style.left = $("input").getBoundingClientRect().left + "px"; box.style.display = "block";
+  const on = box.children[suggOn]; if (on) on.scrollIntoView({ block: "nearest" });
 }
 function hideSuggest() { $("suggest").style.display = "none"; sugg = []; }
 function pickSuggest(n) {
@@ -752,7 +764,7 @@ $("send").addEventListener("click", send);
 $("input").addEventListener("input", onInput);
 $("input").addEventListener("keydown", e => {
   if (sugg.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); suggOn = (suggOn + (e.key === "ArrowDown" ? 1 : sugg.length - 1)) % sugg.length; showSuggest(); return; }
-  if (sugg.length && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) { e.preventDefault(); pickSuggest(sugg[suggOn]); return; }
+  if (sugg.length && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) { e.preventDefault(); pickSuggest(sugg[suggOn].name); return; }
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });
 addEventListener("keydown", e => { if (e.key === "Escape") { if (sugg.length) hideSuggest(); else closeTop(); } });

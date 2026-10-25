@@ -260,6 +260,12 @@ try:
     js("[...document.querySelectorAll('#roombar button')].find(b => b.textContent === '看對話').click()"); time.sleep(1.5)
     check("常駐模式按「看對話」叫回對話", "今天先做哪一件？" in (js("[...document.querySelectorAll('.win .log')].map(l => l.innerText).join('|')") or ""))
     check("常駐、維修、沒進房的都在狀態列", js("document.querySelectorAll('#outside .gchip').length") == 2)
+    # @ 名單：列出全部的人（包含別房的、下線的、沒進房的），可以捲動
+    js("document.getElementById('input').value=''; document.getElementById('input').focus()")
+    type_text("@"); js("onInput()"); time.sleep(0.4)
+    names = js("[...document.querySelectorAll('#suggest div')].map(d => d.firstChild.textContent)") or []
+    check("@ 名單有全部的人", all("@" + n in names for n in ("全部", "主持甲", "工人A", "工人B", "散客", "總管", "維修")))
+    key("Escape"); js("document.getElementById('input').value=''")
     shot("結束")
 finally:
     chrome.terminate(); core.terminate()
