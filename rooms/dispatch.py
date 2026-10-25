@@ -29,7 +29,7 @@ import urllib.parse
 import urllib.request
 
 from rooms import paths
-from rooms.identity import USER, USER_NAME
+from rooms.identity import OWNER_LABEL, USER, USER_NAME
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = os.environ.get("ROOMS_URL", "http://127.0.0.1:8775")
@@ -231,7 +231,7 @@ def render(room, session, events):
     """送進 Codex 的內容：房間規則（它沒有房間 hook）＋這一批訊息。"""
     from rooms.cli import CODEX_RULES as RULES, line_for, maintainer_line
     me = next((m for m in room["members"] if m["session"] == session), {"name": session[:8]})
-    rules = RULES.format(user=USER_NAME, user_id=USER, room=room["name"], room_id=room["room_id"], name=me["name"], owner=room["owner_name"],
+    rules = RULES.format(user=USER_NAME, user_id=USER, owner_label=OWNER_LABEL, room=room["name"], room_id=room["room_id"], name=me["name"], owner=room["owner_name"],
                          session=session, room_cmd=os.path.join(ROOT, "bin", "room"),
                          maintainer_line=maintainer_line(call("GET", "/api/overview")))
     lines = [line_for(e, room["name"]) for e in events]

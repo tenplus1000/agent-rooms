@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 from rooms import judge
-from rooms.identity import USER, USER_NAME
+from rooms.identity import OWNER_LABEL, USER, USER_NAME
 
 # 全域角色：不待在房裡、每間房都看得到、管得動人和房間（不能用使用者的身分發言）。
 #   maintainer：改房間工具本身；被 @、房間暫停、訊息送不到時叫醒它
@@ -200,7 +200,7 @@ class Core:
     # ── 房間與移動 ──────────────────────────────────────
 
     def create_room(self, actor, name, owner=None):
-        """開房。開的人就是負責人；使用者或維修可以指定別人當負責人（主持），自己不進去。"""
+        """開房。開的人就是負責人；使用者或維修可以指定別人當負責人，自己不進去。"""
         if not name.strip():
             raise RoomError("房間要有名字")
         with self.cond:
@@ -253,7 +253,7 @@ class Core:
             return {"room_id": room_id, "pos": self.state["rooms"][room_id]["pos"]}
 
     def set_owner(self, actor, room_id, session):
-        """換負責人（主持）：使用者或全域角色；新的負責人要在房裡。"""
+        """換負責人：使用者或全域角色；新的負責人要在房裡。"""
         with self.cond:
             if not self._admin(actor):
                 raise RoomError("只有使用者或全域角色能換負責人", 403)
@@ -1004,5 +1004,5 @@ class Core:
                 view["last_at"] = (self.events.get(rid) or [{}])[-1].get("at")
                 rooms.append(view)
             return {"rooms": rooms, "agents": agents, "globals": dict(self._globals()),
-                    "user": {"id": USER, "name": USER_NAME}}
+                    "user": {"id": USER, "name": USER_NAME}, "labels": {"owner": OWNER_LABEL}}
 

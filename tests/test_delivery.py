@@ -11,6 +11,7 @@ from unittest import mock
 
 from rooms import cli, dispatch
 from rooms.core import MAX_HOPS, USER, USER_NAME, Core
+from rooms.identity import OWNER_LABEL
 from rooms.server import make_handler
 
 
@@ -434,7 +435,7 @@ class HookTest(LiveServer):
         context = self.run_hook("s-m", "UserPromptSubmit")
         self.assertIn(f"你是 {USER_NAME} 房間工具的維修", context)
         self.assertIn("各房間現況", context)
-        self.assertIn("負責人 主持", context)
+        self.assertIn(f"{OWNER_LABEL} 主持", context)
         self.assertIn("@維修 送不到", context)
         self.assertIsNone(self.run_hook("s-m", "PostToolUse"))           # 沒人再找它就不插話
         self.core.post("s-cx", self.room, "@維修 還是不行")

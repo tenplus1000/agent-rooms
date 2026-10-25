@@ -16,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from rooms.identity import USER, USER_NAME
+from rooms.identity import OWNER_LABEL, USER, USER_NAME, local_time
 
 USER_FLAG = [f"--{USER}"] if USER != "user" else []   # 例如 --alex：使用者的 id 也能當旗標
 
@@ -98,7 +98,7 @@ def line_for(event, room_name):
     if kind == "on":
         return head + "回到線上"
     if kind == "owner":
-        return head + f"把負責人從 {event.get('before_name', '?')} 換成 {event['owner_name']}"
+        return head + f"把{OWNER_LABEL}從 {event.get('before_name', '?')} 換成 {event['owner_name']}"
     if kind == "paused":
         return head + event["text"]
     if kind == "room_created":
@@ -139,10 +139,10 @@ def acc_session(session):
     return {}
 
 
-RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
+RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
 - 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@{user_id} 找 {user}）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
-- 負責人另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的 Codex 成員（背景跑、不用 {user} 開視窗）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）。
+- {owner_label}另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的 Codex 成員（背景跑、不用 {user} 開視窗）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）。
 - 收到成員或別的對話的回報（交件、做完、卡住），回 {user} 的第一句就講誰回報了什麼，不要混在別的狀態裡。
 - 轉達給不在房裡的對話（例如用 SendMessage）時，附上 {user} 原話的時間和你的 session id，對方才查得到那是 {user} 交代的。
 - 等成員回報時，不要用 sleep、until 這類會卡住的指令等，也不用開 Monitor：指令跑著的時候房間訊息進不來；有人交件、回報或找你，房間會在你這一輪結束後叫醒你。
@@ -150,19 +150,19 @@ RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_i
 
 MAINTAINER_RULES = """你是 {user} 房間工具的維修（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：專門改房間工具本身（{repo}）。你不用待在任何房間，每間房都看得到。
 - 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
-- 管理：`move <名字> <房號|none>`、`rename <名字> <新名字>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`title <房號> <新房名>`、`delete <房號>`（房裡沒人時刪房，紀錄會封存）、`resume`（解除暫停）、`create <房名> --owner <名字>`（開普通房、指定主持，你不進去）；要開維修房就 `create <房名>` 再 `join`，你自己當主持。你不能用 {user} 的身分發言，回話都是你自己。
+- 管理：`move <名字> <房號|none>`、`rename <名字> <新名字>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`title <房號> <新房名>`、`delete <房號>`（房裡沒人時刪房，紀錄會封存）、`resume`（解除暫停）、`create <房名> --owner <名字>`（開普通房、指定{owner_label}，你不進去）；要開維修房就 `create <房名>` 再 `join`，你自己當{owner_label}。你不能用 {user} 的身分發言，回話都是你自己。
 - 有人 @維修、房間暫停、訊息送不到，都會叫醒你：先看那間房的紀錄判斷是房間工具的問題還是那間房自己的事；是工具的問題就修，修完 commit、重建核心（`docker compose up -d --build`）、需要時重啟轉送程式，實測過再回那間房說一聲。
 - 改動照 repo 的慣例：設計理由寫 docs/，commit 訊息不寫私人專案名；commit 後會自動推工作 repo 並同步公開版。
 - 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
 
 RESIDENT_RULES = """你是 {user} 的常駐代理，在房間工具裡是全域角色（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：掌握全局——{user} 現在在忙什麼、每間房在做什麼、誰卡住或在等 {user}。你不用待在任何房間，每間房都看得到。
 - 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
-- 派房：`create <房名> --owner <名字>`（開房、指定主持，你不進去）、`move <名字> <房號|none>`、`spawn <名字> "<派工>" --role "<在做什麼>" --room <房號>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`resume`。你不能用 {user} 的身分發言，回話都是你自己。
-- 你不改任何程式、不修房間工具；房間工具的問題寫「@{maintainer}」找維修，專案的實作交給該房的主持或成員。
+- 派房：`create <房名> --owner <名字>`（開房、指定{owner_label}，你不進去）、`move <名字> <房號|none>`、`spawn <名字> "<派工>" --role "<在做什麼>" --room <房號>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`resume`。你不能用 {user} 的身分發言，回話都是你自己。
+- 你不改任何程式、不修房間工具；房間工具的問題寫「@{maintainer}」找維修，專案的實作交給該房的{owner_label}或成員。
 - 有人 @你、有人 @{user_id}（在等 {user}）、房間暫停，都會叫醒你；其他事你每一輪會在總覽裡看到。
 - 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
 
-CODEX_RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
+CODEX_RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
 - 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@{user_id} 找 {user}）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。
 {maintainer_line}- 只處理這間房的事；別的房間你看不到，也不要去找。"""
@@ -208,7 +208,7 @@ def hook():
                     session=session, room_cmd=room_cmd, maintainer_line=maintainer_line(overview))
         parts = []
         if full:
-            parts.append((CODEX_RULES if me["kind"] == "codex" else RULES).format(**info, user=USER_NAME, user_id=USER))
+            parts.append((CODEX_RULES if me["kind"] == "codex" else RULES).format(**info, user=USER_NAME, user_id=USER, owner_label=OWNER_LABEL))
         if lines:
             parts.append("房間的新訊息：\n" + "\n".join(lines))
         if not parts or (not full and not lines):
@@ -250,7 +250,7 @@ def global_hook(session, event_name, full, overview):
         rules = MAINTAINER_RULES if g["kind"] == "maintainer" else RESIDENT_RULES
         keeper = next((call_of(s, k, overview) for s, k in overview["globals"].items() if k["kind"] == "maintainer"),
                       "維修")
-        parts.append(rules.format(user=USER_NAME, user_id=USER, name=me["name"], call=call_of(session, g, overview), session=session,
+        parts.append(rules.format(user=USER_NAME, user_id=USER, owner_label=OWNER_LABEL, name=me["name"], call=call_of(session, g, overview), session=session,
                                   room_cmd=os.path.join(repo, "bin", "room"), repo=repo, maintainer=keeper))
         parts.append(summary_of(overview))
     if lines:
@@ -275,10 +275,10 @@ def summary_of(overview):
             if fail.get("action") in FAILED:
                 state = (state + "，" if state else "") + f"送不到（{fail['action']}）"
             people.append(m["name"] + (f"（{state}）" if state else ""))
-        lines = [f"■ {r['room_id']} {r['name']}｜負責人 {r['owner_name']}"
+        lines = [f"■ {r['room_id']} {r['name']}｜{OWNER_LABEL} {r['owner_name']}"
                  + (f"｜{'、'.join(flags)}" if flags else "") + f"｜成員：{'、'.join(people) or '（沒人）'}"]
         for e in r.get("recent", []):
-            lines.append(f"  #{e['seq']} {e['at'][5:16]} {e['from']}：{e['text'][:100]}")
+            lines.append(f"  #{e['seq']} {local_time(e['at'])} {e['from']}：{e['text'][:100]}")
         active.append("\n".join(lines))
     text = "各房間現況：\n" + "\n".join(active)
     if idle:
@@ -534,7 +534,7 @@ def main(argv=None):
     if a.cmd == "read":
         name = call("GET", f"/api/rooms/{room}", actor)["name"]
         for event in call("GET", f"/api/rooms/{room}/history", actor, since=a.since, limit=a.limit):
-            print(f"#{event['seq']} {event['at']} " + line_for(event, name))
+            print(f"#{event['seq']} {local_time(event['at'], '%Y-%m-%d %H:%M:%S %Z')} " + line_for(event, name))
         return
     if a.cmd == "say":
         return show(call("POST", f"/api/rooms/{room}/post", actor, text=a.text))

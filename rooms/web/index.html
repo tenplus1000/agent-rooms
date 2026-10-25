@@ -117,7 +117,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
   <button id="newRoom">＋ 開房間</button>
   <button id="fit" title="把所有房間放進畫面">全部看得到</button>
   <div id="outside"></div>
-  <span class="hint" title="滾輪縮放、拖空白處移動畫面&#10;點房間的頂面選它，拖房名搬房間&#10;拖點換房：拖到 ★ 當主持，拖離 ★ 卸任，拖到上面的狀態列就是離開房間&#10;點常駐／維修進入跟它講話的模式，再點一下離開&#10;Esc 關最上層">?</span>
+  <span class="hint" title="滾輪縮放、拖空白處移動畫面&#10;點房間的頂面選它，拖房名搬房間&#10;拖點換房：拖到 ★ 換負責人，拖離 ★ 卸任，拖到上面的狀態列就是離開房間&#10;點常駐／維修進入跟它講話的模式，再點一下離開&#10;Esc 關最上層">?</span>
 </div>
 <div id="stage"><div id="world"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg><div id="overlay"></div></div></div>
 <div id="roombar"></div>
@@ -248,6 +248,9 @@ const nameOf = sid => sid === S.ov.user.id ? S.ov.user.name : (agentBy(sid) || {
 const rooms = () => S.ov ? S.ov.rooms.filter(r => !r.desk) : [];
 const globals = () => S.ov ? Object.entries(S.ov.globals || {}).map(([sid, g]) => ({ sid, ...g, name: nameOf(sid) })) : [];
 const callOf = g => g.alias || g.name;
+const OWNER = () => (S.ov && S.ov.labels && S.ov.labels.owner) || "負責人";        // 房間負責人的叫法（設定的）
+const TIME = new Intl.DateTimeFormat(undefined, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+const when = iso => { const d = new Date(iso); return isNaN(d) ? "" : TIME.format(d); };   // 照看的人所在的時區
 function stateOf(m) {
   const a = agentBy(m.session) || {};
   const d = (a.delivery || {}).action;
@@ -309,13 +312,13 @@ function drawRoom(svg, overlay, r, [px, py]) {
   g.append(el("polygon", { points: pts([[0,0,0],[W,0,0],[W,D,0],[0,D,0]]), fill: "rgba(108,182,255,0.05)", stroke: line, "stroke-width": 1 }));
   g.append(el("polygon", { points: pts([[0,0,0],[0,D,0],[0,D,H],[0,0,H]]), fill: "var(--cube)", stroke: line, "stroke-opacity": .35 }));
   g.append(el("polygon", { points: pts([[0,0,0],[W,0,0],[W,0,H],[0,0,H]]), fill: "var(--cube)", stroke: line, "stroke-opacity": .35 }));
-  // 主持的位置（地板前方）
+  // 負責人的位置（地板前方）
   const seat = [W * 0.78, D * 0.78];
   const [sx, sy] = iso(seat[0], seat[1], 0);
   const seated = r.members.some(m => m.session === r.owner);
   g.append(el("ellipse", { cx: sx, cy: sy, rx: 24, ry: 13, fill: seated ? "rgba(240,183,47,0.04)" : "rgba(240,183,47,0.08)",
     stroke: seated ? "none" : "var(--warn)", "stroke-dasharray": "3 3", "data-seat": r.room_id }));
-  if (!seated) g.append(el("text", { x: sx, y: sy + 4, class: "room-sub", "text-anchor": "middle", fill: "var(--warn)", text: "★ 主持", "pointer-events": "none" }));
+  if (!seated) g.append(el("text", { x: sx, y: sy + 4, class: "room-sub", "text-anchor": "middle", fill: "var(--warn)", text: "★ " + OWNER(), "pointer-events": "none" }));
   // 前面兩面牆（透明）
   g.append(el("polygon", { points: pts([[0,D,0],[W,D,0],[W,D,H],[0,D,H]]), fill: "var(--cube)", stroke: line, "pointer-events": "none" }));
   g.append(el("polygon", { points: pts([[W,0,0],[W,D,0],[W,D,H],[W,0,H]]), fill: "var(--cube)", stroke: line, "pointer-events": "none" }));
@@ -354,7 +357,7 @@ function drawRoom(svg, overlay, r, [px, py]) {
   label.addEventListener("pointerdown", e => startRoomDrag(e, r, px, py));
   g.append(label);
   g.append(el("text", { x: lx, y: ly - 11, class: "room-sub", "text-anchor": "middle",
-    text: `${r.room_id}・負責人 ${r.owner_name}${flags ? "・" + flags : ""}`, fill: r.paused ? "var(--warn)" : null }));
+    text: `${r.room_id}・${OWNER()} ${r.owner_name}${flags ? "・" + flags : ""}`, fill: r.paused ? "var(--warn)" : null }));
   svg.append(g);
   drawBubble(overlay, r, px + lx, py + ly - 50);
 }
@@ -456,7 +459,7 @@ async function refreshWin(roomId) {
   if (rows.length) { seenSeq[roomId] = w.last; store.set("seen", seenSeq); if (atBottom || rows.length === w.log.children.length) w.log.scrollTop = w.log.scrollHeight; }
 }
 function msgEl(e) {
-  const at = (e.at || "").slice(5, 16).replace("T", " ");
+  const at = when(e.at);
   const mine = e.from === S.ov.user.id;
   if (e.type === "post") {
     const woke = (e.wake || []).map(nameOf).join("、");
@@ -466,7 +469,7 @@ function msgEl(e) {
       document.createTextNode(e.text));
   }
   const words = { join: "進了房間", leave: "離開房間", whiteboard: "改了白板", off: "下線了", on: "回到線上",
-    room_created: "開了這間房", room_renamed: `把房名改成 ${e.name}`, owner: `把負責人換成 ${e.owner_name}`,
+    room_created: "開了這間房", room_renamed: `把房名改成 ${e.name}`, owner: `把${OWNER()}換成 ${e.owner_name}`,
     paused: e.text, delivery: `〔送不到〕${e.detail || ""}`, task: `任務 ${e.task_id} ${e.action}：${e.objective || ""}` };
   return el("div", { class: "msg sys", text: `${at}　${e.from_name} ${words[e.type] || e.type}` });
 }
@@ -522,7 +525,7 @@ async function deleteRoom(r) {
   if (yes) { S.sel = null; act(api("POST", `/api/rooms/${r.room_id}/delete`), "刪掉了"); }
 }
 async function newRoom() {
-  const res = await dialog({ title: "開房間", input: "房名", ok: "開房", pick: { label: "負責人（不選就是你自己）",
+  const res = await dialog({ title: "開房間", input: "房名", ok: "開房", pick: { label: () => OWNER() + "（不選就是你自己）",
     items: agents().filter(a => !(S.ov.globals || {})[a.session]).filter(a => a.online || a.room_id || a.seen > Date.now() / 1000 - 86400)
       .map(a => ({ value: a.session, text: `${a.name}${a.room_id ? "（在 " + a.room_id + "）" : ""}` })) } });
   if (!res || !res.value || !res.value.trim()) return;
@@ -533,7 +536,7 @@ async function newRoom() {
 }
 async function act(promise, ok) { try { await promise; toast(ok); } catch (e) { toast(e.message); } refresh(); }
 
-// ── 拖拉：搬房間、換房、換主持 ───────────────────
+// ── 拖拉：搬房間、換房、換負責人 ───────────────────
 function startRoomDrag(e, r, px, py) {
   e.preventDefault();
   const sx = e.clientX, sy = e.clientY; let moved = false, dx = 0, dy = 0, frame = 0;
@@ -583,7 +586,7 @@ function startDotDrag(e, m, room) {
       if (target !== from) await api("POST", "/api/move", { session: m.session, room_id: target || "" });
       if (seat) await api("POST", `/api/rooms/${target}/owner`, { session: m.session });
       else if (wasOwner) await api("POST", `/api/rooms/${from}/owner`, { session: S.ov.user.id });   // 拖離 ★：卸任
-      toast(seat ? `${m.name} 當 ${target} 的主持` : wasOwner && target === from ? `${m.name} 卸下主持`
+      toast(seat ? `${m.name} 當 ${target} 的${OWNER()}` : wasOwner && target === from ? `${m.name} 卸下${OWNER()}`
             : target ? `${m.name} 移到 ${target}` : `${m.name} 離開房間`);
     } catch (err) { toast(err.message); }
     refresh();
@@ -704,7 +707,7 @@ function dialog({ title, text, input, value = "", ok = "好", cancel = "取消",
     let field = null;
     if (input) { field = el("input", { placeholder: input }); field.value = value; box.append(field); }
     if (pick) {
-      box.append(el("p", { text: pick.label, style: "margin:0 0 4px" }));
+      box.append(el("p", { text: typeof pick.label === "function" ? pick.label() : pick.label, style: "margin:0 0 4px" }));
       const list = el("div", { class: "pick" });
       pick.items.forEach(it => { const row = el("div", { text: it.text }); row.addEventListener("click", () => {
         chosen = chosen === it.value ? null : it.value; [...list.children].forEach(c => c.classList.remove("on")); if (chosen) row.classList.add("on"); });
