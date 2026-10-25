@@ -25,6 +25,7 @@ USER = "user"
 MAINTAINER = "維修"          # 誰當維修，房裡寫「@維修」都找得到它
 ONLINE_SECONDS = 75          # 監聽一輪最長 50 秒，再寬一點才算離線
 MAX_HOPS = 60
+JUDGE_CONTEXT = 4             # 判官看這則之前最近幾則發言（看得出誰派的工作）
 PAUSED_TEXT = (f"房間暫停了：agent 之間連續互相 @ 超過 {MAX_HOPS} 次（使用者 一直沒出現），之後的訊息照記但不叫醒任何人。"
                "使用者 在房裡、或在任何一個成員自己的對話裡講一句話就恢復；請負責人告訴 使用者。")                # agent 之間連續互相 @ 幾次就暫停，等 使用者 開口（agentchattr 的 loop guard）
 EVERYONE = ("all", "全部", "大家")
@@ -353,25 +354,28 @@ class Core:
         return kind + ("，房間負責人" if room["owner"] == sid else "") + "：" + doing
 
     def judge_wake(self, actor, room_id, text):
-        """沒 @ 任何人的成員發言，先問判官在找誰（呼叫時不拿鎖，判官慢不會卡住整個房間）。
+        """成員發言時問判官：除了被 @ 的人，還有誰該被叫醒（呼叫時不拿鎖，判官慢不會卡住整個房間）。
 
-        回 {"probs": {名字: 機率}} 或 {"error": 原因}；不用問（有 @、使用者 講話、判官關著）回 None。
+        回 {"probs": {名字: 機率}} 或 {"error": 原因}；不用問（使用者 講話、@all、判官關著、沒有別人可問）回 None。
         """
         with self.cond:
             self._require_see(actor, room_id)
             if actor == USER or not text.strip() or not judge.enabled():
                 return None
-            names = MENTION.findall(text)
-            if self._resolve_mentions(room_id, text) or any(n.lower() in EVERYONE for n in names):
+            if any(n.lower() in EVERYONE for n in MENTION.findall(text)):
                 return None
             room = self.state["rooms"][room_id]
             members = self._members(room_id)
+            mentioned = [m for m in self._resolve_mentions(room_id, text) if m in members]
             roles = [(self.name_of(sid), self._role_line(sid, room)) for sid in members]
-            targets = [self.name_of(sid) for sid in members if sid != actor]
+            targets = [self.name_of(sid) for sid in members if sid != actor and sid not in mentioned]
+            posts = [e for e in self.events.get(room_id, []) if e["type"] == "post"][-JUDGE_CONTEXT:]
+            context = [(e["from_name"], e["text"][:200]) for e in posts]
             speaker, room_name = self.name_of(actor), room["name"]
         if not targets:
             return None
-        probs, error = judge.addressees(str(self.data / "judge.jsonl"), room_name, roles, speaker, text, targets)
+        probs, error = judge.addressees(str(self.data / "judge.jsonl"), room_name, roles, speaker, text, targets,
+                                        [self.name_of(m) for m in mentioned], context)
         return {"error": error} if probs is None else {"probs": probs}
 
     def post(self, actor, room_id, text, judged=None):
@@ -394,11 +398,16 @@ class Core:
                 room["paused"] = False
                 if not mentions and not everyone and room["owner"] in members:
                     wake.append(room["owner"])       # 使用者 沒點名就是對負責人說
-            elif not mentions and not everyone and judged and judged.get("probs") is not None:
-                # 判官判過：過門檻的才叫醒；沒有人過就是背景
-                wake = [m for m in members if judged["probs"].get(self.name_of(m), 0) >= judge.THRESHOLD]
-            elif not mentions and not everyone and room["owner"] in members:
-                wake.append(room["owner"])           # 判官叫不到：退回對負責人說，不然負責人看不到
+            else:
+                named = [m for m in mentions if m in members]          # @ 到的房裡成員（不含 使用者、維修）
+                if judged and judged.get("probs") is not None:
+                    # 判官判過：被 @ 的照叫，其他人過門檻的也叫（例如派工的人、事情會碰到的人）
+                    wake += [m for m in members if m not in wake
+                             and judged["probs"].get(self.name_of(m), 0) >= judge.THRESHOLD]
+                elif not named and not everyone and USER not in mentions and room["owner"] in members:
+                    wake.append(room["owner"])       # 判官叫不到：退回對負責人說，不然負責人看不到
+                if USER in mentions and not named and room["owner"] in members and room["owner"] not in wake:
+                    wake.append(room["owner"])       # 只 @user：使用者 不在房裡，要靠負責人轉給他
             just_paused = False
             if actor != USER and wake:
                 room["hops"] = room.get("hops", 0) + 1

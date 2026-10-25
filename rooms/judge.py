@@ -1,5 +1,7 @@
-"""判官：房間裡沒 @ 任何人的訊息，問決策模型（預設 Jev）是在找誰。
+"""判官：成員在房裡講話時，問決策模型（預設 Jev）除了被 @ 的人，還有誰該被叫醒。
 
+每個沒被 @ 的成員問兩題、取高的：在對他說話／要他讀到或去做什麼嗎（QUESTION），
+會不會改變他正在做的工作（IMPACT）。state 帶最近幾則對話，看得出是誰派的工作。
 題目用真實的房間訊息加只改一處的配對句驗過（中文、全部成員一發問完、門檻 0.5）。
 每一發（含失敗）都寫進 <data>/judge.jsonl：題目與答案是之後換模型（例如自架的服務）時拿來比的資料。
 
@@ -21,6 +23,7 @@ URL = "https://openrouter.ai/api/alpha/decisions"
 MODEL = "typesafe/jev-1.13"
 THRESHOLD = 0.5
 QUESTION = "這則訊息是在對「{x}」說話，或需要「{x}」讀到、回應或去做什麼嗎？只問{x}本人，房裡其他成員不算。"
+IMPACT = "這則訊息說的事，會不會改變「{x}」正在做的工作（例如要停下、要接手、要配合，或會碰到他的檔案、程序）？只問{x}本人。"
 
 
 def enabled():
@@ -37,18 +40,25 @@ def _key():
     return os.environ.get("ROOMS_JUDGE_KEY", "").strip() or os.environ.get("OPENROUTER_API_KEY", "").strip()
 
 
-def state_of(room_name, roles, speaker, text):
-    """roles：[(名字, 在做什麼)]，說話的人也列在裡面（模型要知道誰是誰）。"""
-    lines = [f"房間 {room_name} 的成員："]
+def state_of(room_name, roles, speaker, text, mentioned=(), context=()):
+    """roles：[(名字, 在做什麼)]，說話的人也列在裡面（模型要知道誰是誰）。
+    context：[(誰, 說了什麼)]，這則之前最近的幾則；mentioned：這則 @ 了誰。"""
+    lines = [f"房間「{room_name}」的成員（使用者 不在房裡，他透過負責人看房間）："]
     lines += [f"- {name}：{role}" for name, role in roles]
-    lines += ["", f"剛剛「{speaker}」在房裡說了這則訊息（沒有用 @ 點名任何人）：", f"「{text}」"]
+    if context:
+        lines += ["", "最近的對話："] + [f"- {who}：「{said}」" for who, said in context]
+    tag = f"（訊息裡 @ 了：{'、'.join(mentioned)}）" if mentioned else "（沒有用 @ 點名任何房裡的成員）"
+    lines += ["", f"剛剛「{speaker}」在房裡說了這則訊息{tag}：", f"「{text}」"]
     return "\n".join(lines)
 
 
-def addressees(log_path, room_name, roles, speaker, text, targets):
-    """回 ({名字: 機率}, None)；判官叫不到回 (None, 錯誤)。targets 是要問的成員名字（說話者除外）。"""
-    state = state_of(room_name, roles, speaker, text)
-    questions = {f"q{i}": {"type": "noul", "instructions": QUESTION.format(x=x)} for i, x in enumerate(targets)}
+def addressees(log_path, room_name, roles, speaker, text, targets, mentioned=(), context=()):
+    """回 ({名字: 機率}, None)；判官叫不到回 (None, 錯誤)。targets 是要問的成員名字（說話者、被 @ 的除外）。"""
+    state = state_of(room_name, roles, speaker, text, mentioned, context)
+    questions = {}
+    for i, x in enumerate(targets):
+        questions[f"q{i}"] = {"type": "noul", "instructions": QUESTION.format(x=x)}
+        questions[f"i{i}"] = {"type": "noul", "instructions": IMPACT.format(x=x)}
     model = os.environ.get("ROOMS_JUDGE_MODEL", "").strip() or MODEL
     row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
            "room": room_name, "speaker": speaker, "requested_model": model, "state": state, "questions": questions}
@@ -63,7 +73,8 @@ def addressees(log_path, room_name, roles, speaker, text, targets):
         with urllib.request.urlopen(req, timeout=float(os.environ.get("ROOMS_JUDGE_TIMEOUT", "8"))) as resp:
             got = json.loads(resp.read().decode("utf-8"))
         answers = got["answers"]
-        probs = {x: float(answers[f"q{i}"]["noul"]) for i, x in enumerate(targets)}
+        probs = {x: max(float(answers[f"q{i}"]["noul"]), float(answers[f"i{i}"]["noul"]))
+                 for i, x in enumerate(targets)}
         row.update(model=got.get("model"), answers=answers, cost=(got.get("usage") or {}).get("cost"))
     except Exception as exc:          # 不重試；退回由呼叫的一方處理
         error = f"{type(exc).__name__}: {exc}"

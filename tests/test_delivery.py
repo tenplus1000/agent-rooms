@@ -65,10 +65,27 @@ class WakeTest(unittest.TestCase):
         self.assertEqual(event["wake"], ["s-boss"])
         self.assertIn("error", event["judged"])
 
-    def test_mentions_and_user_skip_the_judge(self):
-        _, ask = self.judged_post("s-a", "@b 換你", {})
-        _, ask2 = self.judged_post(USER, "大家好", {})
-        self.assertFalse(ask.called or ask2.called)
+    def test_user_skips_the_judge(self):
+        _, ask = self.judged_post(USER, "大家好", {})
+        self.assertFalse(ask.called)
+
+    def test_judge_adds_people_a_mention_affects(self):
+        self.core.post("s-boss", self.room, "@b 你先做自己的題")
+        event, ask = self.judged_post("s-boss", "@a 開始幫 b，從尾端往前判", {"b": 0.79})
+        self.assertEqual(self.wake_of(event), ["s-a", "s-b"])            # @ 的照叫，事情碰到的 b 也叫
+        self.assertEqual(ask.call_args[0][5], ["b"])                      # 只問沒被 @ 的
+        self.assertEqual(ask.call_args[0][6], ["a"])                      # 告訴判官 @ 了誰
+        self.assertIn(("主持", "@b 你先做自己的題"), ask.call_args[0][7])  # 也給它看最近的對話
+
+    def test_mentioned_only_when_judge_says_nobody_else(self):
+        event, _ = self.judged_post("s-boss", "@a 先把你那份判完", {"b": 0.07})
+        self.assertEqual(self.wake_of(event), ["s-a"])
+        event, _ = self.judged_post("s-boss", "@a 先把你那份判完", None, "URLError: timed out")
+        self.assertEqual(self.wake_of(event), ["s-a"])                    # 判官叫不到也不亂叫負責人
+
+    def test_report_to_user_reaches_the_owner(self):
+        event, _ = self.judged_post("s-a", "@user 重算完成，結果在 out.txt", {"b": 0.1, "主持": 0.42})
+        self.assertEqual(self.wake_of(event), ["s-boss"])                 # 使用者 不在房裡，靠負責人轉
 
     def test_user_without_mention_talks_to_the_owner(self):
         self.assertEqual(self.wake_of(self.core.post(USER, self.room, "這個怎麼樣")), ["s-boss"])
