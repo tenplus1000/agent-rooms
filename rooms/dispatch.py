@@ -69,6 +69,14 @@ CLAUDE_BIN = os.environ.get("ROOMS_CLAUDE_BIN", "").strip() or next(
 # 開一個 WSL 分頁（發行版 ROOMS_WSL_DISTRO，預設 Ubuntu）；不是 WSL 又沒設就不開，只記錄
 CLAUDE_OPEN = os.environ.get("ROOMS_CLAUDE_OPEN", "").strip()
 WSL_DISTRO = os.environ.get("ROOMS_WSL_DISTRO", "").strip() or os.environ.get("WSL_DISTRO_NAME", "") or "Ubuntu"
+# ROOMS_CLAUDE_HOMES：房間可以在背景開 Claude 成員的帳號（CLAUDE_CONFIG_DIR），格式同 ROOMS_CODEX_HOMES；預設只有 ~/.claude
+CLAUDE_NAMES = {}
+for _entry in (os.environ.get("ROOMS_CLAUDE_HOMES", "").strip() or "~/.claude").split(":"):
+    if _entry.strip():
+        _name, _, _path = _entry.strip().rpartition("=")
+        _path = os.path.expanduser(_path)
+        CLAUDE_NAMES[_name or os.path.basename(_path)] = _path
+CLAUDE_MEMBERS = os.path.expanduser("~/.local/state/agent-rooms/claude-members")
 REOPEN_GAP = 180          # 開過視窗後這段時間內不再開（等它起來、hook 接手）   # 視窗自己握著對話、沒接背景服務：daemon 確定沒收下
 
 
@@ -399,6 +407,35 @@ class Worker(threading.Thread):
             self.fail("failed_after", "訊息送進去了，但那一輪沒跑起來（對話變成錯誤狀態，常見是額度用完）", events)
 
 
+def spawn_claude(cwd, account, model=None, effort=None, mode=None):
+    """房間開的 Claude 成員：沒有視窗，每一批訊息由轉送程式跑一次 `claude -p` 接著同一個對話。
+
+    這裡只記下設定（帳號、模型、推理強度、權限、工作資料夾），第一則訊息送進去時才真的開出對話。
+    回 (session id, 帳號資料夾)。"""
+    import uuid
+    if account not in CLAUDE_NAMES:
+        raise RuntimeError(f"沒有這個 Claude 帳號：{account}（有：{'、'.join(CLAUDE_NAMES)}；在 ROOMS_CLAUDE_HOMES 設）")
+    session = str(uuid.uuid4())
+    os.makedirs(CLAUDE_MEMBERS, exist_ok=True)
+    member = {"account": account, "home": CLAUDE_NAMES[account], "cwd": cwd, "model": model, "effort": effort,
+              "mode": mode or "auto", "started": False}
+    with open(os.path.join(CLAUDE_MEMBERS, session + ".json"), "w", encoding="utf-8") as fh:
+        json.dump(member, fh, ensure_ascii=False, indent=1)
+    return session, CLAUDE_NAMES[account]
+
+
+def claude_member(session):
+    try:
+        with open(os.path.join(CLAUDE_MEMBERS, session + ".json"), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def claude_member_hint(session, member):
+    return f"CLAUDE_CONFIG_DIR={member['home']} claude --resume {session}（在 {member['cwd']}）"
+
+
 def claude_alive(session):
     """有沒有程式開著這個 Claude 對話：~/.claude/sessions/<pid>.json 記著 pid 與對話 id，pid 還在、啟動時間對得上才算。"""
     for path in glob.glob(os.path.join(CLAUDE_HOME, "sessions", "*.json")):
@@ -512,6 +549,85 @@ class ClaudeWorker(Worker):
                 time.sleep(BACKOFF["error"])
 
 
+class HeadlessClaudeWorker(Worker):
+    """房間開的 Claude 成員：有新的一批就跑一次 `claude -p`（同一個對話接著講），跑完才收下一批。
+
+    沒有人能按核准：權限照開成員時給的模式（預設 auto），房間指令另外放行，回話一定送得出去。"""
+
+    def run(self):
+        while not self.stop:
+            try:
+                got = call("GET", "/api/listen", session=self.session, wait=30, triggers_only=1,
+                           consume=0, heartbeat=0)
+                if not got["events"] or self.stop:
+                    continue
+                self.sent = [t for t in self.sent if time.time() - t < 3600]
+                if len(self.sent) >= CAP_PER_HOUR:
+                    self.note("capped", f"一小時內已叫醒 {CAP_PER_HOUR} 次，先停；訊息留著", light=True)
+                    time.sleep(60)
+                    continue
+                self.turn(got["room_id"], got["events"])
+            except Exception as error:
+                log(self.session[:8], "Claude 成員出錯", error)
+                time.sleep(BACKOFF["error"])
+
+    def turn(self, room_id, events):
+        member = claude_member(self.session)
+        room = call("GET", f"/api/rooms/{room_id}", **{"as": self.session})
+        text = render_claude(room, self.session, events)
+        room_cmd = os.path.join(ROOT, "bin", "room")
+        args = [CLAUDE_BIN, "-p", "--output-format", "json", "--permission-mode", member["mode"],
+                "--allowedTools", f"Bash({room_cmd}:*)"]
+        args += ["--resume", self.session] if member["started"] else ["--session-id", self.session]
+        if member.get("model"):
+            args += ["--model", member["model"]]
+        if member.get("effort"):
+            args += ["--effort", member["effort"]]
+        env = dict(os.environ, ROOMS_DISPATCHED="1")
+        env.pop("CLAUDE_CONFIG_DIR", None)
+        if os.path.realpath(member["home"]) != os.path.realpath(os.path.expanduser("~/.claude")):
+            env["CLAUDE_CONFIG_DIR"] = member["home"]     # 預設帳號不設：設了它會改到那個資料夾裡找 .claude.json
+        # 先推進游標再跑（跟 Codex 一樣不自動重送）；跑的時候進來的訊息下一輪再送
+        call("POST", "/api/ack", session=self.session, room_id=room_id, seq=events[-1]["seq"])
+        call("POST", "/api/touch", session=self.session)
+        self.last_sent = time.time()
+        self.sent.append(self.last_sent)
+        self.note("turn", f"背景跑 claude -p（{member['account']}）送了 {len(events)} 則（到 #{events[-1]['seq']}）")
+        os.makedirs(os.path.join(CLAUDE_MEMBERS, "logs"), exist_ok=True)
+        with open(os.path.join(CLAUDE_MEMBERS, "logs", self.session + ".jsonl"), "a", encoding="utf-8") as out:
+            done = subprocess.run(args + [text], cwd=member["cwd"], env=env, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            out.write(json.dumps({"at": time.time(), "seq": events[-1]["seq"], "code": done.returncode,
+                                  "output": done.stdout[-20000:], "stderr": done.stderr[-5000:]}, ensure_ascii=False) + "\n")
+        try:
+            result = json.loads(done.stdout)
+        except ValueError:
+            result = {"is_error": True, "result": (done.stdout.strip() or done.stderr.strip())[-300:]}
+        if not member["started"] and done.returncode == 0:
+            member["started"] = True
+            with open(os.path.join(CLAUDE_MEMBERS, self.session + ".json"), "w", encoding="utf-8") as fh:
+                json.dump(member, fh, ensure_ascii=False, indent=1)
+        call("POST", "/api/touch", session=self.session)
+        if done.returncode or result.get("is_error"):
+            self.fail("failed_after", f"那一輪沒跑完（{str(result.get('result') or '')[:200]}）；"
+                      f"訊息已送過不重送，可用 {claude_member_hint(self.session, member)} 接上看", events)
+            return
+        self.reported = None
+        log(self.session[:8], "那一輪跑完", f"{result.get('duration_ms', 0) / 1000:.0f} 秒")
+
+
+def render_claude(room, session, events):
+    """送進背景 Claude 的內容：房間規則（它沒有房間 hook，用命令列跟房間說話）＋這一批訊息。"""
+    from rooms.cli import RULES, line_for, maintainer_line
+    me = next((m for m in room["members"] if m["session"] == session), {"name": session[:8]})
+    rules = RULES.format(user=USER_NAME, user_id=USER, owner_label=OWNER_LABEL, room=room["name"], room_id=room["room_id"],
+                         name=me["name"], owner=room["owner_name"], session=session,
+                         room_cmd=os.path.join(ROOT, "bin", "room"), maintainer_line=maintainer_line(call("GET", "/api/overview")))
+    lines = [line_for(e, room["name"]) for e in events]
+    return (rules + "\n- 你在背景跑、沒有視窗：回話一律用上面的 say 指令，直接寫在這裡的文字沒有人看得到。"
+            "\n\n房間的新訊息：\n" + "\n".join(lines))
+
+
 def main():
     workers = {}
     log("轉送程式啟動，核心", BASE)
@@ -520,7 +636,9 @@ def main():
             agents = call("GET", "/api/overview")["agents"]
             wanted = {a["session"]: a["kind"] for a in agents if a["kind"] in ("codex", "claude") and a.get("room_id")}
             for session in wanted.keys() - workers.keys():
-                workers[session] = (ClaudeWorker if wanted[session] == "claude" else Worker)(session)
+                kind = wanted[session]
+                workers[session] = (Worker if kind == "codex" else
+                                    HeadlessClaudeWorker if claude_member(session) else ClaudeWorker)(session)
                 workers[session].start()
                 log(session[:8], "開始替它監聽")
             for session in list(workers.keys() - wanted):

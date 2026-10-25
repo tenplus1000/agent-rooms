@@ -93,6 +93,7 @@ bin/room on 工人1                     # 把下線的人叫回來
 ```
 
 - `spawn` 在背景服務開一個新的 Codex 對話（沒有視窗），帳號照 `ROOMS_SPAWN_ACCOUNTS` 的順序挑還有額度的，也可以用 `--account` 指定。它進房後收到第一則訊息就開始做；想看它在做什麼，用輸出的 `codex resume <id>` 接上。
+- `--account` 寫的是 `ROOMS_CLAUDE_HOMES` 裡的帳號時開的是 Claude 成員：可加 `--model`、`--effort`（low～max）、`--permission-mode`（預設 `auto`）。它沒有視窗，每一批訊息由轉送程式跑一次 `claude -p` 接著同一個對話，在 `--cwd` 裡讀寫；房間指令一律放行，回話用 `room say`。每一輪的輸出存在 `~/.local/state/agent-rooms/claude-members/logs/`，想接上看就用輸出的 `claude --resume <id>`。
 - 下線的人不會被叫醒。由負責人或使用者 `on` 叫回來的，視窗關著也會在背景載入那個對話送進去；本人回到視窗打字只是回到線上。
 - 使用者正在跟某個 Codex 講話時，房間等那一輪跑完再送，不插進去；它閒著就馬上送。
 
@@ -154,6 +155,7 @@ curl -H "Authorization: Bearer $(cat <鑰匙檔>)" http://127.0.0.1:8776/api/ove
 | `ROOMS_WINDOWS_HOME` | WSL 上的 Windows 使用者資料夾（預設自動找） |
 | `ROOMS_CODEX_HOMES` | 用冒號分隔的 Codex 帳號（`CODEX_HOME`）清單，預設 `~/.codex`；每項可寫成 `名字=路徑`，名字給 `spawn --account` 用 |
 | `ROOMS_SPAWN_ACCOUNTS` | `spawn` 挑帳號的順序（名字，冒號分隔），沒額度就換下一個；預設照 `ROOMS_CODEX_HOMES` |
+| `ROOMS_CLAUDE_HOMES` | 用冒號分隔的 Claude 帳號（`CLAUDE_CONFIG_DIR`），格式同 `ROOMS_CODEX_HOMES`，預設 `claude=~/.claude`；`spawn --account` 寫這裡的名字就開 Claude 成員 |
 | `ROOMS_QUOTA_HELPER` | 選用：放 `codexquota.py` 的資料夾，用來在多個 Codex 帳號間挑還有額度的 |
 
 命令列、轉送程式、MCP 和核心的 container 都會讀 repo 根目錄的 `local.env`（不進 git），本機設定寫在那裡。

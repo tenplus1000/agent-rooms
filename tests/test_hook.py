@@ -33,5 +33,13 @@ class AutoRegisterTest(unittest.TestCase):
         self.assertEqual(self.run_register({"cwd": "/work/x"}, env="sdk-cli"), [])
 
 
+    def test_dispatcher_run_skips_the_room_hook(self):
+        """背景 Claude 成員那一輪：訊息已經帶在 prompt 裡，hook 不再注入、也不登記。"""
+        called = []
+        with mock.patch.object(cli, "_quick", lambda *a: called.append(a)), mock.patch.dict(os.environ, {"ROOMS_DISPATCHED": "1"}), \
+                mock.patch("sys.stdin", mock.Mock(read=lambda: '{"session_id": "s-1", "hook_event_name": "UserPromptSubmit"}')):
+            cli.hook()
+        self.assertEqual(called, [])
+
 if __name__ == "__main__":
     unittest.main()

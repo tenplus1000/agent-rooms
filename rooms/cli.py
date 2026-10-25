@@ -142,7 +142,7 @@ def acc_session(session):
 RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
 - 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@{user_id} 找 {user}）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
-- {owner_label}另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的 Codex 成員（背景跑、不用 {user} 開視窗）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）。
+- {owner_label}另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的成員（背景跑、不用 {user} 開視窗；帳號是 Claude 帳號時可加 `--model`、`--effort`）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）。
 - 收到成員或別的對話的回報（交件、做完、卡住），回 {user} 的第一句就講誰回報了什麼，不要混在別的狀態裡。
 - 轉達給不在房裡的對話（例如用 SendMessage）時，附上 {user} 原話的時間和你的 session id，對方才查得到那是 {user} 交代的。
 - 等成員回報時，不要用 sleep、until 這類會卡住的指令等，也不用開 Monitor：指令跑著的時候房間訊息進不來；有人交件、回報或找你，房間會在你這一輪結束後叫醒你。
@@ -175,8 +175,8 @@ def hook():
         payload = json.loads(sys.stdin.read() or "{}")
         session = payload.get("session_id", "")
         event_name = payload.get("hook_event_name", "UserPromptSubmit")
-        if not session:
-            return
+        if not session or os.environ.get("ROOMS_DISPATCHED"):
+            return                # 轉送程式自己跑的那一輪（背景 Claude 成員）：訊息已經帶在 prompt 裡
         if event_name == "Stop":
             return rewake(session)
         full = event_name == "UserPromptSubmit"
@@ -389,8 +389,8 @@ def show(result):
     print(json.dumps(result, ensure_ascii=False, indent=1))
 
 
-def spawn(actor, room_id, name, role, text, cwd, account=None):
-    """開新的 Codex 對話 → 登記成房間開的成員 → 進房 → 寫在做什麼 → @ 他發第一則訊息。
+def spawn(actor, room_id, name, role, text, cwd, account=None, model=None, effort=None, mode=None):
+    """開新的 Codex 對話（帳號是 Claude 帳號就開 Claude 成員） → 登記成房間開的成員 → 進房 → 寫在做什麼 → @ 他發第一則訊息。
 
     第一則由轉送程式送進去（帶房間規則），跟其他成員收訊息走同一條路。
     """
@@ -400,16 +400,23 @@ def spawn(actor, room_id, name, role, text, cwd, account=None):
     if not os.path.isdir(cwd):
         sys.exit(f"沒有這個資料夾：{cwd}")
     from rooms import dispatch
+    claude = account in dispatch.CLAUDE_NAMES
+    if (model or effort or mode) and not claude:
+        sys.exit("--model／--effort／--permission-mode 目前只給 Claude 成員用（--account 要是 ROOMS_CLAUDE_HOMES 裡的帳號）")
     try:
-        thread_id, home = dispatch.spawn(os.path.abspath(cwd), account)
+        if claude:
+            thread_id, home = dispatch.spawn_claude(os.path.abspath(cwd), account, model, effort, mode)
+        else:
+            thread_id, home = dispatch.spawn(os.path.abspath(cwd), account)
     except RuntimeError as error:
         sys.exit(f"錯誤：{error}")
-    call("POST", "/api/register", session=thread_id, kind="codex", name=name, spawned_by=actor)
+    call("POST", "/api/register", session=thread_id, kind="claude" if claude else "codex", name=name, spawned_by=actor)
     call("POST", "/api/move", thread_id, session=thread_id, room_id=room_id)
     call("POST", "/api/role", actor, session=thread_id, role=role)
     posted = call("POST", f"/api/rooms/{room_id}/post", actor, text=f"@{name} {text}")
-    show({"spawned": thread_id, "name": name, "account": dispatch.account_name(home), "cwd": os.path.abspath(cwd),
-          "attach": dispatch.resume_hint(thread_id, home), "post": posted})
+    attach = dispatch.claude_member_hint(thread_id, dispatch.claude_member(thread_id)) if claude else dispatch.resume_hint(thread_id, home)
+    show({"spawned": thread_id, "name": name, "account": account if claude else dispatch.account_name(home),
+          "cwd": os.path.abspath(cwd), "attach": attach, "post": posted})
 
 
 def main(argv=None):
@@ -454,11 +461,16 @@ def main(argv=None):
     s = sub.add_parser("off", help="把成員標成下線（做完了、視窗關了）：不叫醒，訊息留著")
     s.add_argument("target", nargs="?", help="名字或 session；不填就是自己"); s.add_argument("--reason", default="")
     s = sub.add_parser("on", help="把成員標回線上，留著的訊息會補送"); s.add_argument("target", nargs="?")
-    s = sub.add_parser("spawn", help="負責人開一個新的 Codex 成員（背景跑、沒有視窗），進房後收到第一則訊息")
+    s = sub.add_parser("spawn", help="負責人開一個新的 Codex／Claude 成員（背景跑、沒有視窗），進房後收到第一則訊息")
     s.add_argument("name"); s.add_argument("text", help="給他的第一則訊息（派工）")
     s.add_argument("--role", required=True, help="一句話：他在做什麼")
     s.add_argument("--cwd", default=None, help="工作資料夾，預設是現在的資料夾")
-    s.add_argument("--account", default=None, help="指定 Codex 帳號（ROOMS_CODEX_HOMES 裡的名字）；預設照 ROOMS_SPAWN_ACCOUNTS 挑還有額度的")
+    s.add_argument("--account", default=None, help="指定帳號：ROOMS_CODEX_HOMES 裡的是 Codex 成員、ROOMS_CLAUDE_HOMES 裡的是 Claude 成員；"
+                   "預設照 ROOMS_SPAWN_ACCOUNTS 挑還有額度的 Codex 帳號")
+    s.add_argument("--model", default=None, help="Claude 成員的模型（例如 sonnet、opus 或完整名稱）")
+    s.add_argument("--effort", default=None, choices=["low", "medium", "high", "xhigh", "max"], help="Claude 成員的推理強度")
+    s.add_argument("--permission-mode", dest="mode", default=None, choices=["auto", "acceptEdits", "bypassPermissions", "dontAsk"],
+                   help="Claude 成員的權限模式，預設 auto（沒人能按核准；房間指令一律放行）")
     s = sub.add_parser("role", help="寫成員在做什麼（一句話）：沒 @ 的訊息由判官照這個判在找誰")
     s.add_argument("target"); s.add_argument("text")
     s = sub.add_parser("dnd"); s.add_argument("state", choices=["on", "off"]); s.add_argument("--target")
@@ -535,7 +547,8 @@ def main(argv=None):
     if a.cmd == "role":
         return show(call("POST", "/api/role", actor, session=agent_of(a.target), role=a.text))
     if a.cmd == "spawn":
-        return spawn(actor, current_room(actor, a.room), a.name, a.role, a.text, a.cwd or os.getcwd(), a.account)
+        return spawn(actor, current_room(actor, a.room), a.name, a.role, a.text, a.cwd or os.getcwd(), a.account,
+                     a.model, a.effort, a.mode)
     if a.cmd in ("off", "on"):
         target = agent_of(a.target) if a.target else actor
         return show(call("POST", "/api/off", actor, session=target, on=a.cmd == "off", reason=getattr(a, "reason", "")))
