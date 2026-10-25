@@ -180,12 +180,12 @@ try:
     check("工人B 當專案甲主持", next(r for r in ov["rooms"] if r["room_id"] == r1)["owner"] == "a3")
     # 散客拖進專案乙
     time.sleep(1.5)
-    drag(center('[data-session="a4"] circle'), b2)
+    drag(center('#outside [data-session="a4"]'), b2)
     ov = call("GET", "/api/overview")
     check("外面的散客拖進專案乙", next(x for x in ov["agents"] if x["session"] == "a4")["room_id"] == r2)
     shot("拖拉後")
     # 點常駐 → 模式；送出 → 專屬管道
-    click(*center('[data-global="r"] polygon')); time.sleep(0.8)
+    click(*center('#outside [data-global="r"]')); time.sleep(0.8)
     check("點總管進入常駐模式", "總管" in js("document.getElementById('targetName').textContent"))
     js("document.getElementById('input').focus()"); type_text("今天先做哪一件？"); key("Enter"); time.sleep(1.8)
     desk = next(r for r in call("GET", "/api/overview")["rooms"] if r.get("desk") == "r")
@@ -199,7 +199,7 @@ try:
     check("總管回話時六角形旁冒泡泡", "先做專案甲" in (js("[...document.querySelectorAll('.bubble')].map(b => b.innerText).join('|')") or ""))
     shot("常駐模式")
     key("Escape"); time.sleep(0.5)
-    click(*center('[data-global="r"] polygon')); time.sleep(0.8)
+    click(*center('#outside [data-global="r"]')); time.sleep(0.8)
     check("再點一次離開模式", "沒選房間" in js("document.getElementById('targetName').textContent"))
     # @ 別房的人：記在對方的房
     js("document.getElementById('input').focus()"); type_text("@工人A 那份怎麼樣"); key("Enter"); time.sleep(1.5)
@@ -222,6 +222,25 @@ try:
     n = js("document.querySelectorAll('.bubble').length")
     js("document.querySelector('.bubble .x').click()"); time.sleep(0.8)
     check("泡泡 ✕ 收起", js("document.querySelectorAll('.bubble').length") == n - 1)
+    # 縮放、平移
+    k0 = js("S.view.k")
+    ws.cdp("Input.dispatchMouseEvent", type="mouseWheel", x=700, y=450, deltaX=0, deltaY=-300); time.sleep(0.4)
+    check("滾輪放大", js("S.view.k") > k0)
+    x0 = js("S.view.x"); drag([1300, 800], [1100, 700])
+    check("拖空白處平移", abs(js("S.view.x") - x0 - (-200)) < 5)
+    # 主持拖離 ★：卸任（先按「全部看得到」，剛才放大平移後房間可能在畫面外）
+    js("Object.keys(S.wins).forEach(closeWin); document.getElementById('fit').click()"); time.sleep(1.5)
+    seat_dot = center('[data-room="%s"] [data-session="a3"] circle' % r1)
+    floor = js(f"""(() => {{ const g = document.querySelector('[data-room="{r1}"]'); const p = g.querySelectorAll('polygon')[0];
+        const b = p.getBoundingClientRect(); return [b.left + b.width * 0.3, b.top + b.height * 0.35]; }})()""")
+    drag(seat_dot, floor)
+    ov = call("GET", "/api/overview")
+    check("主持拖離 ★ 就卸任", next(r for r in ov["rooms"] if r["room_id"] == r1)["owner"] == "user")
+    # 專屬管道的對話叫得回來：點總管 → 看對話
+    click(*center('#outside [data-global="r"]')); time.sleep(0.8)
+    js("[...document.querySelectorAll('#roombar button')].find(b => b.textContent === '看對話').click()"); time.sleep(1.5)
+    check("常駐模式按「看對話」叫回對話", "今天先做哪一件？" in (js("[...document.querySelectorAll('.win .log')].map(l => l.innerText).join('|')") or ""))
+    check("常駐、維修、沒進房的都在狀態列", js("document.querySelectorAll('#outside .gchip').length") == 2)
     shot("結束")
 finally:
     chrome.terminate(); core.terminate()

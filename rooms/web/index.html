@@ -20,9 +20,24 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 #top { position: fixed; top: 0; left: 0; right: 0; height: 44px; display: flex; align-items: center; gap: 10px;
   padding: 0 14px; background: rgba(14, 17, 22, 0.9); border-bottom: 1px solid var(--line); z-index: 20; }
 #top .title { font-weight: 600; letter-spacing: 1px; }
-#top .hint { color: var(--dim); font-size: 12px; margin-left: auto; }
-#stage { position: fixed; top: 44px; left: 0; right: 0; bottom: 96px; overflow: auto; }
-#world { position: relative; width: 2600px; height: 1700px; }
+#top .hint { color: var(--dim); font-size: 12px; margin-left: auto; cursor: help; border: 1px solid var(--line);
+  border-radius: 50%; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; }
+#outside { display: flex; align-items: center; gap: 8px; overflow-x: auto; min-width: 0; flex: 1; scrollbar-width: none; }
+.gchip { border: 1px solid var(--warn); color: var(--text); background: rgba(240,183,47,0.07); border-radius: 14px;
+  padding: 2px 12px; cursor: pointer; white-space: nowrap; font-weight: 600; position: relative; }
+.gchip.on { background: rgba(240,183,47,0.28); }
+.gchip small { color: var(--dim); font-weight: 400; margin-left: 4px; }
+.gchip .n { position: absolute; right: -6px; top: -7px; background: var(--accent); color: #0b1220; border-radius: 9px;
+  font-size: 10px; padding: 0 5px; font-weight: 700; }
+.sep { width: 1px; height: 22px; background: var(--line); flex: none; }
+.loose-label { color: var(--dim); font-size: 12px; white-space: nowrap; }
+.lchip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border: 1px dashed var(--line); border-radius: 12px;
+  cursor: grab; white-space: nowrap; font-size: 12px; user-select: none; touch-action: none; }
+.lchip i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.bubble.fixed { position: fixed; z-index: 21; }
+#stage { position: fixed; top: 44px; left: 0; right: 0; bottom: 96px; overflow: hidden; touch-action: none; cursor: grab; }
+#stage.panning { cursor: grabbing; }
+#world { position: absolute; left: 0; top: 0; width: 2600px; height: 1700px; transform-origin: 0 0; }
 #world svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
 .room-label { fill: var(--text); font-size: 14px; font-weight: 600; cursor: grab; user-select: none; }
 .room-sub { fill: var(--dim); font-size: 11px; user-select: none; }
@@ -82,7 +97,8 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 108px; background: var(--panel2); border: 1px solid var(--line);
   padding: 6px 12px; border-radius: 8px; z-index: 60; display: none; }
 @media (max-width: 700px) {
-  #top .hint { display: none; }
+  #top { gap: 6px; padding: 0 8px; }
+  #fit { display: none; }
   #bar { gap: 6px; padding: 10px 8px; }
   #target { min-width: 0; max-width: 92px; padding: 0 6px; }
   #target .v { font-size: 12px; white-space: normal; }
@@ -95,7 +111,9 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 <div id="top">
   <span class="title">房間</span>
   <button id="newRoom">＋ 開房間</button>
-  <span class="hint">點房間選它　拖房名搬房間　拖點換房（拖到 ★ 換主持）　Esc 關最上層</span>
+  <button id="fit" title="把所有房間放進畫面">全部看得到</button>
+  <div id="outside"></div>
+  <span class="hint" title="滾輪縮放、拖空白處移動畫面&#10;點房間的頂面選它，拖房名搬房間&#10;拖點換房：拖到 ★ 當主持，拖離 ★ 卸任，拖到上面的狀態列就是離開房間&#10;點常駐／維修進入跟它講話的模式，再點一下離開&#10;Esc 關最上層">?</span>
 </div>
 <div id="stage"><div id="world"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg><div id="overlay"></div></div></div>
 <div id="roombar"></div>
@@ -110,7 +128,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 <script>
 "use strict";
 // ── 狀態 ─────────────────────────────────────────
-const S = { ov: null, sel: null, mode: null, wins: {}, layers: [], desks: {}, drag: null };
+const S = { ov: null, sel: null, mode: null, wins: {}, layers: [], desks: {}, drag: null, view: null };
 const W = 150, D = 150, H = 100, COS = 0.866, SIN = 0.5;          // 立方體尺寸與等角投影
 const store = {
   get(k, d) { try { const v = localStorage.getItem("rooms." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -118,6 +136,68 @@ const store = {
 };
 const seenSeq = store.get("seen", {});        // 每間房看到第幾則
 const hiddenSeq = store.get("hidden", {});    // 泡泡收起時的最後一則（有更新的才再冒出來）
+
+// ── 視角：平移＋縮放 ─────────────────────────────
+S.view = store.get("view", { x: 0, y: 0, k: 1 });
+function applyView() {
+  $("world").style.transform = `translate(${S.view.x}px,${S.view.y}px) scale(${S.view.k})`;
+  store.set("view", S.view); placeRoombar();
+}
+function zoomAt(f, cx, cy) {
+  const box = $("stage").getBoundingClientRect();
+  const k = Math.min(2.5, Math.max(0.25, S.view.k * f));
+  const wx = (cx - box.left - S.view.x) / S.view.k, wy = (cy - box.top - S.view.y) / S.view.k;   // 游標底下的那一點
+  S.view = { x: cx - box.left - wx * k, y: cy - box.top - wy * k, k };
+  applyView();
+}
+function fitAll() {
+  const list = rooms();
+  if (!list.length) { S.view = { x: 0, y: 0, k: 1 }; return applyView(); }
+  const xs = [], ys = [];
+  list.forEach((r, i) => { const [x, y] = roomPos(r, i); xs.push(x, x + (W + D) * COS); ys.push(y - 90, y + H + (W + D) * SIN + 40); });
+  const box = $("stage").getBoundingClientRect();
+  const w = Math.max(...xs) - Math.min(...xs) + 40, h = Math.max(...ys) - Math.min(...ys) + 40;
+  const k = Math.min(1.4, Math.max(0.25, Math.min(box.width / w, box.height / h)));
+  S.view = { x: -Math.min(...xs) * k + 20, y: -Math.min(...ys) * k + 10, k };
+  applyView();
+}
+function setupView() {
+  const stage = $("stage"), pts = {};
+  let last = null;
+  const ids = () => Object.keys(pts);
+  const rebase = () => { const k = ids(); if (k.length >= 2) { const a = pts[k[0]], b = pts[k[1]];
+    last = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) }; } else if (k.length) last = { ...pts[k[0]] }; else last = null; };
+  stage.addEventListener("pointerdown", e => {
+    const bg = e.target === stage || e.target === $("svg") || e.target === $("world");
+    if (!bg || (e.button !== 0 && e.button !== 1)) return;
+    if (e.button === 1) e.preventDefault();
+    pts[e.pointerId] = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY };
+    rebase();
+  });
+  addEventListener("pointermove", e => {
+    const p = pts[e.pointerId]; if (!p) return;
+    p.x = e.clientX; p.y = e.clientY;
+    if (!p.held) { if (Math.hypot(p.x - p.sx, p.y - p.sy) < 5) return; p.held = true; stage.classList.add("panning"); }  // 還算是點一下
+    const k = ids();
+    if (k.length >= 2) {
+      const a = pts[k[0]], b = pts[k[1]];
+      const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (last && last.d && d) zoomAt(d / last.d, m.x, m.y);
+      if (last) { S.view.x += m.x - last.x; S.view.y += m.y - last.y; applyView(); }
+      last = { x: m.x, y: m.y, d };
+    } else if (last) {
+      S.view.x += p.x - last.x; S.view.y += p.y - last.y; applyView();
+      last = { x: p.x, y: p.y };
+    }
+  });
+  const lift = e => { const p = pts[e.pointerId]; if (!p) return;
+    const wasClick = !p.held; delete pts[e.pointerId]; rebase(); stage.classList.remove("panning");
+    if (wasClick && !ids().length && (S.sel || S.mode)) { S.sel = null; render(); } };
+  addEventListener("pointerup", lift); addEventListener("pointercancel", lift);
+  stage.addEventListener("auxclick", e => { if (e.button === 1) e.preventDefault(); });
+  stage.addEventListener("wheel", e => { e.preventDefault(); zoomAt(e.deltaY > 0 ? 0.89 : 1.12, e.clientX, e.clientY); }, { passive: false });
+  applyView();
+}
 
 // ── 跟核心講話 ───────────────────────────────────
 async function api(method, path, params = {}) {
@@ -177,14 +257,13 @@ function stateOf(m) {
 function roomPos(r, i) {
   if (r.pos) return r.pos;
   const cols = Math.max(1, Math.floor(($("stage").clientWidth - 40) / 340));
-  return [40 + (i % cols) * 340, (narrow() ? 330 : 230) + Math.floor(i / cols) * 400];
+  return [40 + (i % cols) * 340, 110 + Math.floor(i / cols) * 400];
 }
 function render() {
   const svg = $("svg"); svg.replaceChildren();
   const overlay = $("overlay"); overlay.replaceChildren();
   rooms().forEach((r, i) => drawRoom(svg, overlay, r, roomPos(r, i)));
-  const trayRight = drawTray(svg);
-  drawGlobals(svg, trayRight);
+  drawOutside();
   updateTarget(); placeRoombar();
   for (const id of Object.keys(S.wins)) if (!S.ov.rooms.find(r => r.room_id === id)) closeWin(id);
 }
@@ -245,36 +324,30 @@ function drawDot(g, m, [x, y], room, isOwner, small) {
   dot.addEventListener("pointerdown", e => startDotDrag(e, m, room));
   g.append(dot);
 }
-const narrow = () => $("stage").clientWidth < 700;
-function drawGlobals(svg, left) {
-  const list = globals();
-  list.forEach((gl, i) => {
-    const x = narrow() ? 90 + i * 130 : left + 70 + i * 130, y = $("stage").scrollTop + (narrow() ? 190 : 70);
-    const on = S.mode === gl.sid;
-    const g = el("g", { style: "cursor:pointer", "data-global": gl.sid });
-    g.append(el("polygon", { points: hex(x, y, 34), fill: on ? "rgba(240,183,47,0.22)" : "rgba(240,183,47,0.07)",
-      stroke: "var(--warn)", "stroke-width": on ? 2.5 : 1.2 }));
-    g.append(el("text", { x, y: y + 4, "text-anchor": "middle", class: "room-label", style: "cursor:pointer", text: callOf(gl) }));
-    g.append(el("text", { x, y: y + 52, "text-anchor": "middle", class: "room-sub",
-      text: gl.kind === "maintainer" ? "維修房間工具" : "常駐代理" }));
-    g.addEventListener("click", () => { S.mode = S.mode === gl.sid ? null : gl.sid; if (S.mode) S.sel = null; render(); });
-    svg.append(g);
+function drawOutside() {
+  const box = $("outside"); box.replaceChildren();
+  document.querySelectorAll(".bubble.fixed").forEach(b => b.remove());
+  for (const gl of globals()) {
     const desk = S.ov.rooms.find(r => r.desk === gl.sid);
-    if (desk) drawBubble($("overlay"), desk, x + 108, y + 4);
-  });
-}
-function hex(x, y, r) { return [0,1,2,3,4,5].map(k => { const a = Math.PI / 3 * k + Math.PI / 6; return `${x + r * Math.cos(a)},${y + r * Math.sin(a) * 0.8}`; }).join(" "); }
-function drawTray(svg) {
+    const n = desk ? unread(desk) : 0;
+    const chip = el("span", { class: "gchip" + (S.mode === gl.sid ? " on" : ""), "data-global": gl.sid,
+      title: gl.kind === "maintainer" ? "維修房間工具" : "常駐代理" },
+      document.createTextNode(callOf(gl)), el("small", { text: gl.kind === "maintainer" ? "維修" : "常駐" }),
+      n ? el("span", { class: "n", text: String(n) }) : null);
+    chip.addEventListener("click", () => { S.mode = S.mode === gl.sid ? null : gl.sid; if (S.mode) S.sel = null; render(); });
+    box.append(chip);
+    if (desk) requestAnimationFrame(() => { const b = chip.getBoundingClientRect(); drawBubble(document.body, desk, b.left + 60, b.bottom + 52, true); });
+  }
   const day = Date.now() / 1000 - 86400;
   const loose = agents().filter(a => !a.room_id && !(S.ov.globals || {})[a.session] && (a.online || a.seen > day));
-  const x0 = 40 + $("stage").scrollLeft, y0 = 14 + $("stage").scrollTop;
-  svg.append(el("rect", { x: x0, y: y0, width: Math.max(260, 70 + loose.length * 90), height: 110, rx: 14, fill: "none",
-    stroke: "var(--line)", "stroke-dasharray": "5 5", "data-tray": "1" }));
-  svg.append(el("text", { x: x0 + 14, y: y0 + 20, class: "tray-label", text: loose.length ? "沒進房的對話（拖進房間）" : "沒進房的對話：目前沒有" }));
-  const g = el("g");
-  loose.forEach((a, k) => drawDot(g, { ...a, members: [] }, [x0 + 50 + k * 90, y0 + 60], null));
-  svg.append(g);
-  return x0 + Math.max(260, 70 + loose.length * 90);
+  box.append(el("span", { class: "sep" }), el("span", { class: "loose-label", text: loose.length ? "沒進房：" : "沒進房：沒有" }));
+  for (const a of loose) {
+    const [state, color] = stateOf({ ...a, members: [] });
+    const chip = el("span", { class: "lchip", "data-session": a.session, title: `${a.name}・${state}・拖進房間` },
+      el("i", { style: `background:${color}` }), document.createTextNode(a.name));
+    chip.addEventListener("pointerdown", e => startDotDrag(e, a, null));
+    box.append(chip);
+  }
 }
 
 // ── 泡泡與對話視窗 ───────────────────────────────
@@ -283,12 +356,12 @@ function unread(r) {
   const seen = seenSeq[r.room_id] || 0;
   return (r.recent || []).filter(e => e.seq > seen && e.from !== S.ov.user.name).length;
 }
-function drawBubble(overlay, r, x, y) {
+function drawBubble(overlay, r, x, y, fixed) {
   const last = lastEvent(r);
   if (!last || S.wins[r.room_id]) return;
   const n = unread(r);
   if (!n || (hiddenSeq[r.room_id] || 0) >= last.seq) return;
-  const b = el("div", { class: "bubble", style: `left:${x - 60}px;top:${y - 48}px` },
+  const b = el("div", { class: "bubble" + (fixed ? " fixed" : ""), style: `left:${x - 60}px;top:${y - 48}px` },
     el("span", { class: "n", text: String(n) }),
     el("div", { class: "txt" }, el("span", { class: "who", text: last.from + "：" }), document.createTextNode(last.text)),
     el("span", { class: "x", title: "暫時收起", text: "✕" }));
@@ -367,14 +440,23 @@ function dragWin(win) {
 function selectRoom(id) { S.sel = S.sel === id ? null : id; if (S.sel) S.mode = null; render(); }
 function placeRoombar() {
   const bar = $("roombar"); bar.replaceChildren();
+  if (!S.ov) return;
+  if (S.mode) {                                      // 常駐／維修模式：在六角形底下放「看對話」
+    const hexEl = document.querySelector(`#outside [data-global="${S.mode}"]`);
+    if (!hexEl) { bar.style.display = "none"; return; }
+    const b = hexEl.getBoundingClientRect();
+    bar.style.left = b.left + "px"; bar.style.top = (b.bottom + 8) + "px"; bar.style.display = "flex";
+    bar.append(el("button", { text: "看對話", on: { click: async () => {
+      const id = await deskRoom(S.mode); hiddenSeq[id] = 0; store.set("hidden", hiddenSeq); openWin(id); } } }));
+    return;
+  }
   const r = S.sel && S.ov.rooms.find(x => x.room_id === S.sel);
   if (!r) { bar.style.display = "none"; return; }
-  const i = rooms().indexOf(r);
-  const [px, py] = roomPos(r, i);
-  const [lx, ly] = iso(W, D, 0);
-  const stage = $("stage");
-  bar.style.left = (px + lx - stage.scrollLeft - 60) + "px";
-  bar.style.top = (44 + py + ly - stage.scrollTop + 26) + "px";
+  const g = document.querySelector(`[data-room="${r.room_id}"]`);
+  if (!g) { bar.style.display = "none"; return; }
+  const b = g.getBoundingClientRect();
+  bar.style.left = (b.left + b.width / 2 - 100) + "px";
+  bar.style.top = (b.bottom + 8) + "px";
   bar.style.display = "flex";
   bar.append(el("button", { text: "看對話", on: { click: () => { hiddenSeq[r.room_id] = 0; store.set("hidden", hiddenSeq); openWin(r.room_id); } } }));
   bar.append(el("button", { text: "改名", on: { click: () => renameRoom(r) } }));
@@ -407,12 +489,13 @@ function startRoomDrag(e, r, px, py) {
   e.preventDefault();
   const sx = e.clientX, sy = e.clientY; let moved = false;
   const g = document.querySelector(`[data-room="${r.room_id}"]`);
-  const move = ev => { const dx = ev.clientX - sx, dy = ev.clientY - sy; if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+  const k = S.view.k;
+  const move = ev => { const dx = (ev.clientX - sx) / k, dy = (ev.clientY - sy) / k; if (Math.abs(dx) + Math.abs(dy) > 4 / k) moved = true;
     if (moved) g.setAttribute("transform", `translate(${px + dx},${py + dy})`); };
   const up = ev => {
     removeEventListener("pointermove", move); removeEventListener("pointerup", up);
     if (!moved) return selectRoom(r.room_id);
-    const x = Math.max(0, px + ev.clientX - sx), y = Math.max(0, py + ev.clientY - sy);
+    const x = Math.max(0, px + (ev.clientX - sx) / k), y = Math.max(0, py + (ev.clientY - sy) / k);
     r.pos = [x, y]; render();
     api("POST", `/api/rooms/${r.room_id}/pos`, { x, y }).catch(err => toast(err.message));
   };
@@ -437,10 +520,13 @@ function startDotDrag(e, m, room) {
     const cube = hit.map(n => n.closest && n.closest("[data-room]")).find(Boolean);
     const target = seat ? seat.getAttribute("data-seat") : cube ? cube.getAttribute("data-room") : null;
     const from = room ? room.room_id : null;
+    const wasOwner = room && room.owner === m.session;
     try {
       if (target !== from) await api("POST", "/api/move", { session: m.session, room_id: target || "" });
       if (seat) await api("POST", `/api/rooms/${target}/owner`, { session: m.session });
-      toast(seat ? `${m.name} 當 ${target} 的主持` : target ? `${m.name} 移到 ${target}` : `${m.name} 離開房間`);
+      else if (wasOwner) await api("POST", `/api/rooms/${from}/owner`, { session: S.ov.user.id });   // 拖離 ★：卸任
+      toast(seat ? `${m.name} 當 ${target} 的主持` : wasOwner && target === from ? `${m.name} 卸下主持`
+            : target ? `${m.name} 移到 ${target}` : `${m.name} 離開房間`);
     } catch (err) { toast(err.message); }
     refresh();
   };
@@ -571,6 +657,7 @@ function closeTop() { const l = S.layers.pop(); if (l) l.close(); }
 // ── 啟動與更新 ───────────────────────────────────
 async function refresh() {
   try {
+    const firstLoad = !S.ov;
     S.ov = await api("GET", "/api/overview");
     let first = false;
     for (const r of S.ov.rooms) {
@@ -579,10 +666,11 @@ async function refresh() {
     }
     if (first) store.set("seen", seenSeq);
     render();
+    if (firstLoad && !store.get("viewSet", false)) { fitAll(); store.set("viewSet", true); }
     await Promise.all(Object.keys(S.wins).map(refreshWin));
   } catch (e) { toast("連不上核心：" + e.message); }
 }
-$("svg").addEventListener("pointerdown", e => { if (e.target === $("svg")) { if (S.sel) { S.sel = null; render(); } } });
+
 $("newRoom").addEventListener("click", newRoom);
 $("send").addEventListener("click", send);
 $("input").addEventListener("input", onInput);
@@ -592,7 +680,8 @@ $("input").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });
 addEventListener("keydown", e => { if (e.key === "Escape") { if (sugg.length) hideSuggest(); else closeTop(); } });
-$("stage").addEventListener("scroll", () => { placeRoombar(); });
+$("fit").addEventListener("click", fitAll);
+setupView();
 refresh();
 setInterval(refresh, 2500);
 </script>
