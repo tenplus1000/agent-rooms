@@ -549,6 +549,50 @@ class ClaudeWorker(Worker):
                 time.sleep(BACKOFF["error"])
 
 
+QUOTA_HIT = "hit your session limit"
+
+
+def quota_until(account, until=None):
+    """Claude 帳號額度重置的時間（存檔，轉送程式重啟也記得）：之前同帳號的成員都不送，訊息留著、重置後補。"""
+    path = os.path.join(CLAUDE_MEMBERS, "quota.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            known = json.load(fh)
+    except (OSError, ValueError):
+        known = {}
+    if until is not None:
+        known[account] = until
+        os.makedirs(CLAUDE_MEMBERS, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(known, fh)
+    return known.get(account, 0)
+
+
+def quota_reset(text, now=None):
+    """「You've hit your session limit · resets 4:50am (Europe/Berlin)」→ 重置時間（epoch）；讀不懂就 15 分鐘後再試。"""
+    import re
+    from zoneinfo import ZoneInfo
+    now = now or time.time()
+    m = re.search(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)?\s*(?:\(([^)]+)\))?", text or "", re.I)
+    if not m:
+        return now + 900
+    try:
+        zone = ZoneInfo(m.group(4)) if m.group(4) else None
+    except Exception:
+        zone = None
+    hour = int(m.group(1)) % 12 + (12 if (m.group(3) or "").lower() == "pm" else 0) if m.group(3) else int(m.group(1))
+    here = datetime.datetime.fromtimestamp(now, zone or datetime.timezone.utc)
+    at = here.replace(hour=hour, minute=int(m.group(2) or 0), second=0, microsecond=0)
+    if at.timestamp() <= now:
+        at += datetime.timedelta(days=1)
+    return at.timestamp() + 60                      # 多等一分鐘，別剛好卡在邊上
+
+
+def claude_started(member, session):
+    """這個對話開過了沒：看那個帳號的紀錄裡有沒有它（第一輪撞額度失敗時，對話其實已經建好了）。"""
+    return member.get("started") or bool(glob.glob(os.path.join(member["home"], "projects", "*", session + ".jsonl")))
+
+
 class HeadlessClaudeWorker(Worker):
     """房間開的 Claude 成員：有新的一批就跑一次 `claude -p`（同一個對話接著講），跑完才收下一批。
 
@@ -560,6 +604,10 @@ class HeadlessClaudeWorker(Worker):
                 got = call("GET", "/api/listen", session=self.session, wait=30, triggers_only=1,
                            consume=0, heartbeat=0)
                 if not got["events"] or self.stop:
+                    continue
+                wait = quota_until(claude_member(self.session)["account"]) - time.time()
+                if wait > 0:
+                    time.sleep(min(wait, 60))   # 額度用完：訊息留著（游標沒推進），重置後補送
                     continue
                 self.sent = [t for t in self.sent if time.time() - t < 3600]
                 if len(self.sent) >= CAP_PER_HOUR:
@@ -578,7 +626,7 @@ class HeadlessClaudeWorker(Worker):
         room_cmd = os.path.join(ROOT, "bin", "room")
         args = [CLAUDE_BIN, "-p", "--output-format", "json", "--permission-mode", member["mode"],
                 "--allowedTools", f"Bash({room_cmd}:*)"]
-        args += ["--resume", self.session] if member["started"] else ["--session-id", self.session]
+        args += ["--resume", self.session] if claude_started(member, self.session) else ["--session-id", self.session]
         if member.get("model"):
             args += ["--model", member["model"]]
         if member.get("effort"):
@@ -587,8 +635,7 @@ class HeadlessClaudeWorker(Worker):
         env.pop("CLAUDE_CONFIG_DIR", None)
         if os.path.realpath(member["home"]) != os.path.realpath(os.path.expanduser("~/.claude")):
             env["CLAUDE_CONFIG_DIR"] = member["home"]     # 預設帳號不設：設了它會改到那個資料夾裡找 .claude.json
-        # 先推進游標再跑（跟 Codex 一樣不自動重送）；跑的時候進來的訊息下一輪再送
-        call("POST", "/api/ack", session=self.session, room_id=room_id, seq=events[-1]["seq"])
+        # 跑完才推進游標：撞到額度上限時這一批留著，重置後補送；其他失敗照樣推進、不自動重送
         call("POST", "/api/touch", session=self.session)
         self.last_sent = time.time()
         self.sent.append(self.last_sent)
@@ -603,11 +650,19 @@ class HeadlessClaudeWorker(Worker):
             result = json.loads(done.stdout)
         except ValueError:
             result = {"is_error": True, "result": (done.stdout.strip() or done.stderr.strip())[-300:]}
-        if not member["started"] and done.returncode == 0:
+        if not member["started"] and claude_started(member, self.session):
             member["started"] = True
             with open(os.path.join(CLAUDE_MEMBERS, self.session + ".json"), "w", encoding="utf-8") as fh:
                 json.dump(member, fh, ensure_ascii=False, indent=1)
         call("POST", "/api/touch", session=self.session)
+        said = str(result.get("result") or "")
+        if (done.returncode or result.get("is_error")) and QUOTA_HIT in said:
+            until = quota_reset(said)
+            quota_until(member["account"], until)
+            at = datetime.datetime.fromtimestamp(until).astimezone().strftime("%H:%M")
+            self.fail("quota_wait", f"{member['account']} 的額度用完了，這一批留著，約 {at} 重置後自動補送", events)
+            return
+        call("POST", "/api/ack", session=self.session, room_id=room_id, seq=events[-1]["seq"])
         if done.returncode or result.get("is_error"):
             self.fail("failed_after", f"那一輪沒跑完（{str(result.get('result') or '')[:200]}）；"
                       f"訊息已送過不重送，可用 {claude_member_hint(self.session, member)} 接上看", events)

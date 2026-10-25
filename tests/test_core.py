@@ -43,6 +43,13 @@ class CoreTest(unittest.TestCase):
         self.core.post("s-cx1", other, f"@{self.room} 格式在白板")                 # 直接寫房號也行
         self.assertTrue(any("〔從 標資料" in e.get("text", "") for e in self.drain("s-claude")))
 
+    def test_rewind_only_moves_back_and_only_for_admins(self):
+        self.core.ack("s-claude", self.room, 9)
+        with self.assertRaises(RoomError):
+            self.core.rewind("s-cx1", "s-claude", self.room, 2)
+        self.assertEqual(self.core.rewind(USER, "s-claude", self.room, 2), 2)
+        self.assertEqual(self.core.rewind(USER, "s-claude", self.room, 5), 2)       # 不會往前推
+
     def test_only_hosts_relay(self):
         other = self.other_room()
         self.core.post("s-cx2", other, "@主持 我想直接問你")                      # 成員不是負責人：不跨房

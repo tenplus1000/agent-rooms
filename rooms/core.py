@@ -963,6 +963,16 @@ class Core:
             self._save()
             return agent["cursor"][room_id]
 
+    def rewind(self, actor, session, room_id, seq):
+        """把游標倒回 seq（使用者或全域角色用）：轉送程式誤把沒跑成的一批記成送到時，讓那一批重送。"""
+        if not self._admin(actor):
+            raise RoomError("只有使用者或全域角色能倒回游標", 403)
+        with self.cond:
+            agent = self._agent(session)
+            agent["cursor"][room_id] = min(agent["cursor"].get(room_id, 0), int(seq))
+            self._commit()
+            return agent["cursor"][room_id]
+
     def record_delivery(self, session, action, detail="", light=False, notify=()):
         """每一次叫醒、插話、延後、擋下都記一筆；light=True 時在他所在的房間亮燈。
 

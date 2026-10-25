@@ -21,9 +21,14 @@ import json, os, sys
 with open({str(self.record)!r}, "a") as fh:
     fh.write(json.dumps({{"args": sys.argv[1:], "cwd": os.getcwd(), "home": os.environ.get("CLAUDE_CONFIG_DIR"),
                          "dispatched": os.environ.get("ROOMS_DISPATCHED")}}) + "\\n")
+if "--session-id" in sys.argv:                       # 真的 claude 一開始就建好對話紀錄
+    sid = sys.argv[sys.argv.index("--session-id") + 1]
+    d = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", "-w"); os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, sid + ".jsonl"), "w").close()
 fail = os.environ.get("FAKE_FAIL")
 print("一行警告", file=sys.stderr)
-print(json.dumps({{"is_error": bool(fail), "result": "壞了" if fail else "好", "duration_ms": 10}}))
+msg = "You've hit your session limit · resets 4:50am (Europe/Berlin)" if fail == "limit" else "壞了" if fail else "好"
+print(json.dumps({{"is_error": bool(fail), "result": msg, "duration_ms": 10}}))
 sys.exit(1 if fail else 0)
 """)
         fake.chmod(0o755)
@@ -60,14 +65,35 @@ sys.exit(1 if fail else 0)
             self.assertEqual((c["cwd"], c["home"], c["dispatched"]), (str(self.work), home, "1"))
             self.assertEqual(a[-1], "房間的新訊息")
         acks = [kw["seq"] for path, kw in self.posts if path == "/api/ack"]
-        self.assertEqual(acks, [3, 5])
+        self.assertEqual(acks, [3, 5])                                        # 跑完才推進
 
-    def test_failed_turn_lights_up_and_is_not_marked_started(self):
+    def test_failed_turn_lights_up_and_next_turn_resumes(self):
         session, _ = dispatch.spawn_claude(str(self.work), "c2")
         os.environ["FAKE_FAIL"] = "1"
         dispatch.HeadlessClaudeWorker(session).turn("R1", [{"seq": 2, "from": "u", "wake": [session]}])
         self.assertTrue(any(p == "/api/delivery" and kw["action"] == "failed_after" for p, kw in self.posts))
-        self.assertFalse(dispatch.claude_member(session)["started"])
+        self.assertTrue(dispatch.claude_member(session)["started"])     # 失敗了對話也已經建好：下一輪用 --resume
+        self.assertEqual([kw["seq"] for p, kw in self.posts if p == "/api/ack"], [2])   # 不是額度問題：照樣推進、不重送
+
+    def test_quota_holds_the_batch_and_later_resumes_same_session(self):
+        session, home = dispatch.spawn_claude(str(self.work), "c2")
+        os.environ["FAKE_FAIL"] = "limit"
+        dispatch.HeadlessClaudeWorker(session).turn("R1", [{"seq": 4, "from": "u", "wake": [session]}])
+        self.assertFalse([kw for p, kw in self.posts if p == "/api/ack"])        # 這一批留著
+        self.assertTrue(any(p == "/api/delivery" and kw["action"] == "quota_wait" for p, kw in self.posts))
+        self.assertGreater(dispatch.quota_until("c2"), 0)
+        os.environ.pop("FAKE_FAIL")
+        dispatch.HeadlessClaudeWorker(session).turn("R1", [{"seq": 4}])
+        self.assertIn("--resume", self.calls()[-1]["args"])                      # 不會再用 --session-id 開新的
+
+    def test_reset_time_is_parsed_in_its_zone(self):
+        import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.datetime(2026, 10, 26, 0, 20, tzinfo=ZoneInfo("Europe/Berlin")).timestamp()
+        got = dispatch.quota_reset("You've hit your session limit · resets 4:50am (Europe/Berlin)", now)
+        self.assertEqual(datetime.datetime.fromtimestamp(got, ZoneInfo("Europe/Berlin")).strftime("%d %H:%M"), "26 04:51")
+        got = dispatch.quota_reset("resets 4:50am (Europe/Berlin)", now + 6 * 3600)                 # 已經過了：明天
+        self.assertEqual(datetime.datetime.fromtimestamp(got, ZoneInfo("Europe/Berlin")).strftime("%d %H:%M"), "27 04:51")
 
     def test_unknown_account_is_refused(self):
         with self.assertRaises(RuntimeError):
