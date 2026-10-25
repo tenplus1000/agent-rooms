@@ -39,6 +39,13 @@ def paused_text(limit):
             f"這間房常需要長時間互傳的話，可以用 hops 調高上限或設成 off。")
 EVERYONE = ("all", "全部", "大家")
 MENTION = re.compile(r"@([\w\-\.㐀-鿿]+)")
+# 畫面上房間是等角立方體（寬、深 150，高 100，cos 30°／sin 30°）。兩間的位置差剛好是其中一面的距離就算「接上」：
+# 地板四個方向加上下疊，共六面。網頁拖近時會吸到這些位置。
+_CW, _CD, _CH, _COS, _SIN = 150, 150, 100, 0.866, 0.5
+NEIGHBOR_SIDES = {"右後": (_CW * _COS, _CW * _SIN), "左前": (-_CW * _COS, -_CW * _SIN),
+                  "左後": (-_CD * _COS, _CD * _SIN), "右前": (_CD * _COS, -_CD * _SIN),
+                  "上": (0, -_CH), "下": (0, _CH)}
+NEIGHBOR_SLACK = 2.0
 
 
 class RoomError(Exception):
@@ -255,11 +262,19 @@ class Core:
             return {"room_id": room_id, "deleted": room["name"]}
 
     def set_room_pos(self, actor, room_id, x, y):
-        """畫面上房間擺在哪（使用者、全域角色或負責人拖的）。"""
+        """畫面上房間擺在哪（使用者、全域角色或負責人拖的）。接上或拉開別間時，兩邊房裡都記一筆。"""
         with self.cond:
             if not self._is_room_owner(actor, room_id):
                 raise RoomError("只有使用者、全域角色或負責人能搬房間", 403)
+            before = set(self.neighbors(room_id))
             self._room(room_id)["pos"] = [float(x), float(y)]
+            after = set(self.neighbors(room_id))
+            for other in sorted(after - before):
+                for a, b in ((room_id, other), (other, room_id)):
+                    self._emit(a, "linked", actor, other=b, other_name=self.state["rooms"][b]["name"])
+            for other in sorted(before - after):
+                for a, b in ((room_id, other), (other, room_id)):
+                    self._emit(a, "unlinked", actor, other=b, other_name=self.state["rooms"][b]["name"])
             self._commit()
             return {"room_id": room_id, "pos": self.state["rooms"][room_id]["pos"]}
 
@@ -413,12 +428,46 @@ class Core:
                 raise RoomError("只有房間負責人和使用者能改白板", 403)
             self.state["rooms"][room_id]["whiteboard"] = text
             self._emit(room_id, "whiteboard", actor, chars=len(text))
+            for other in self.neighbors(room_id):          # 接上的房也看得到這塊白板：告訴他們改了
+                self._emit(other, "whiteboard", actor, chars=len(text), neighbor=room_id,
+                           neighbor_name=self.state["rooms"][room_id]["name"])
             self._commit()
 
     def whiteboard(self, actor, room_id):
         with self.cond:
             self._require_see(actor, room_id)
             return self.state["rooms"][room_id]["whiteboard"]
+
+    def neighbors(self, room_id):
+        """畫面上跟這間接上的房（六面任一面貼著）：{房號: 哪一面}。專屬管道、沒擺過位置的不算。"""
+        room = self._room(room_id)
+        if not room.get("pos") or room.get("desk"):
+            return {}
+        x, y = room["pos"]
+        found = {}
+        for rid, other in self.state["rooms"].items():
+            if rid == room_id or not other.get("pos") or other.get("desk"):
+                continue
+            dx, dy = other["pos"][0] - x, other["pos"][1] - y
+            for side, (sx, sy) in NEIGHBOR_SIDES.items():
+                if abs(dx - sx) <= NEIGHBOR_SLACK and abs(dy - sy) <= NEIGHBOR_SLACK:
+                    found[rid] = side
+        return found
+
+    def neighbor_boards(self, actor, room_id):
+        """接上的房的白板：看得到，改不了（各自只改自己的）。"""
+        with self.cond:
+            self._require_see(actor, room_id)
+            return [{"room_id": rid, "name": self.state["rooms"][rid]["name"], "side": side,
+                     "owner_name": self.name_of(self.state["rooms"][rid]["owner"]),
+                     "whiteboard": self.state["rooms"][rid]["whiteboard"]}
+                    for rid, side in self.neighbors(room_id).items()]
+
+    def hosts(self, actor):
+        """各房的負責人（給負責人找別房負責人傳訊用）：房號、房名、負責人名字。"""
+        with self.cond:
+            return [{"room_id": rid, "name": r["name"], "owner_name": self.name_of(r["owner"]) if r.get("owner") else None}
+                    for rid, r in self.state["rooms"].items() if not r.get("desk")]
 
     # ── 訊息與線頭 ──────────────────────────────────────
 
@@ -438,6 +487,22 @@ class Core:
                 target = by_name.get(name)
             if target and target not in found:
                 found.append(target)
+        return found
+
+    def _host_targets(self, actor, room_id, text):
+        """負責人 @ 了別房的負責人（名字，或直接寫房號）：{對方 session: 對方房號}。"""
+        here = set(self._members(room_id))
+        owners = {}
+        for rid, r in self.state["rooms"].items():
+            if rid != room_id and not r.get("desk") and r.get("owner") and r["owner"] != USER \
+                    and r["owner"] != actor and r["owner"] in self.state["agents"]:
+                owners[self.state["agents"][r["owner"]]["name"]] = (r["owner"], rid)
+                owners.setdefault(rid, (r["owner"], rid))
+        found = {}
+        for name in MENTION.findall(text):
+            hit = owners.get(name) or owners.get(name.upper())
+            if hit and hit[0] not in here and hit[0] not in self._globals():
+                found.setdefault(*hit)
         return found
 
     def set_role(self, actor, session, role):
@@ -497,6 +562,7 @@ class Core:
             self._require_see(actor, room_id)
             room = self.state["rooms"][room_id]
             mentions = [m for m in self._resolve_mentions(room_id, text) if m != actor]
+            relays = self._host_targets(actor, room_id, text) if room["owner"] == actor else {}
             # 他開口了，就是在回應（之後交給判官做更細的判斷）
             self._answered(room_id, actor, "發言")
             members = [m for m in self._members(room_id) if m != actor]
@@ -545,11 +611,21 @@ class Core:
             event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake, held=held, **extra)
             for target in mentions:
                 self._open_thread(room_id, target, actor, text, "mention", ref=event["seq"])
+            relayed = []
+            for target, other in relays.items():
+                # 負責人找別房的負責人：送到對方房（對方房裡的人都看得到），叫醒那位負責人
+                note = f"〔從 {room['name']}（{room_id}）{OWNER_LABEL} {self.name_of(actor)} 傳來〕"
+                got = self._emit(other, "post", actor, text=note + text, mentions=[target], wake=[target],
+                                 held=False, via=room_id)
+                self._open_thread(other, target, actor, text, "mention", ref=got["seq"])
+                relayed.append(f"{self.name_of(target)}（{other}）")
             if just_paused and (room["owner"] in members or self._woken_on("paused")):
                 # 負責人要知道房間停了（發話的人收到的 notice 不會轉告別人），由他告訴使用者；只叫這一次
                 self._emit(room_id, "paused", actor, text=paused_text(limit),
                            wake=[w for w in [room["owner"]] + self._woken_on("paused") if w])
             self._commit()
+            if relayed:
+                event = dict(event, relayed=relayed)
             if held:
                 # 發話的人要知道：訊息記下了，但沒有人被叫醒
                 return dict(event, notice="房間暫停中：這則已記下，但沒有叫醒任何人；使用者在房裡講一句話才恢復。")
@@ -1052,6 +1128,7 @@ class Core:
                 view["recent"] = [{"seq": e["seq"], "at": e["at"], "from": e["from_name"], "type": e["type"],
                                    "text": (e.get("text") or e.get("detail") or "")[:120]} for e in posts[-3:]]
                 view["last_at"] = (self.events.get(rid) or [{}])[-1].get("at")
+                view["neighbors"] = self.neighbors(rid)
                 rooms.append(view)
             return {"rooms": rooms, "agents": agents, "globals": dict(self._globals()),
                     "user": {"id": USER, "name": USER_NAME}, "labels": {"owner": OWNER_LABEL}}

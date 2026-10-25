@@ -26,6 +26,50 @@ class CoreTest(unittest.TestCase):
 
     # ── 房間、移動、知識邊界 ─────────────────────────────
 
+    def other_room(self):
+        """第二間房：codex-1 當負責人。"""
+        rid = self.core.create_room(USER, "標資料", owner="s-cx1")["room_id"]
+        self.core.move("s-cx1", "s-cx1", rid)
+        self.core.move(USER, "s-cx2", rid)
+        return rid
+
+    def test_host_messages_another_host_by_name_or_room_id(self):
+        other = self.other_room()
+        got = self.core.post("s-claude", self.room, "@codex-1 你那邊的標註格式給我")
+        self.assertEqual(got["relayed"], [f"codex-1（{other}）"])
+        rows = self.drain("s-cx1")
+        self.assertTrue(any("〔從 素材包" in e["text"] and "s-cx1" in e["wake"] for e in rows if e["type"] == "post"))
+        self.assertFalse(any("s-cx2" in e.get("wake", ()) for e in self.drain("s-cx2")))   # 對方房的成員沒被叫醒
+        self.core.post("s-cx1", other, f"@{self.room} 格式在白板")                 # 直接寫房號也行
+        self.assertTrue(any("〔從 標資料" in e.get("text", "") for e in self.drain("s-claude")))
+
+    def test_only_hosts_relay(self):
+        other = self.other_room()
+        self.core.post("s-cx2", other, "@主持 我想直接問你")                      # 成員不是負責人：不跨房
+        self.assertFalse(any("〔從" in e.get("text", "") for e in self.core.history(USER, self.room)))
+
+    def test_adjacent_rooms_share_boards_read_only(self):
+        other = self.other_room()
+        self.core.set_whiteboard("s-claude", self.room, "素材包的規矩")
+        self.core.set_whiteboard("s-cx1", other, "標資料的規矩")
+        self.core.set_room_pos(USER, self.room, 100, 100)
+        self.core.set_room_pos(USER, other, 400, 400)
+        self.assertEqual(self.core.neighbor_boards("s-claude", self.room), [])
+        self.core.set_room_pos(USER, other, 100 + 150 * 0.866, 100 + 75)           # 貼在右後面
+        boards = self.core.neighbor_boards("s-claude", self.room)
+        self.assertEqual([(b["room_id"], b["whiteboard"]) for b in boards], [(other, "標資料的規矩")])
+        self.assertTrue(any(e["type"] == "linked" for e in self.core.history(USER, other)))
+        with self.assertRaises(RoomError):
+            self.core.set_whiteboard("s-claude", other, "改別人的")              # 看得到，改不了
+        self.core.set_whiteboard("s-cx1", other, "新規矩")
+        self.assertTrue(any(e["type"] == "whiteboard" and e.get("neighbor") == other
+                            for e in self.core.history(USER, self.room)))
+        self.core.set_room_pos(USER, other, 100, 100 - 100)                         # 疊在上面也算
+        self.assertEqual(self.core.overview()["rooms"][0]["neighbors"], {other: "上"})
+        self.core.set_room_pos(USER, other, 600, 600)                               # 拉開就不共用
+        self.assertEqual(self.core.neighbor_boards("s-claude", self.room), [])
+        self.assertTrue(any(e["type"] == "unlinked" for e in self.core.history(USER, self.room)))
+
     def test_only_user_deletes_an_empty_room_and_keeps_its_log(self):
         with self.assertRaises(RoomError):
             self.core.delete_room("s-claude", self.room)                   # 負責人不能刪

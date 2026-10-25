@@ -90,6 +90,8 @@ def make_handler(core, remote=False):
                 if INDEX_HTML.exists():
                     return INDEX_HTML.read_bytes(), "text/html; charset=utf-8"
                 return b"agent-rooms core", "text/plain; charset=utf-8"
+            if method == "GET" and path == "/api/hosts":
+                return core.hosts(actor)
             if method == "GET" and path == "/api/overview":
                 return core.overview()
             if method == "POST" and path == "/api/register":
@@ -159,6 +161,8 @@ def make_handler(core, remote=False):
                     if method == "PUT" or method == "POST":
                         return core.set_whiteboard(actor, room_id, a.get("text", ""))
                     return core.whiteboard(actor, room_id)
+                if sub == "neighbors":
+                    return core.neighbor_boards(actor, room_id)
                 if sub == "post" and method == "POST":
                     text = a.get("text", "")
                     return core.post(actor, room_id, text, judged=core.judge_wake(actor, room_id, text))

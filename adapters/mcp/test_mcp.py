@@ -15,7 +15,7 @@ import urllib.request
 REPO = Path(__file__).resolve().parents[2]
 EXPECTED = {
     'room_join', 'room_leave', 'room_who', 'room_read', 'room_say',
-    'room_whiteboard_get', 'room_whiteboard_set', 'room_threads', 'room_thread_close',
+    'room_whiteboard_get', 'room_whiteboard_set', 'room_neighbor_boards', 'room_hosts', 'room_threads', 'room_thread_close',
     'room_moves', 'room_dnd', 'task_new', 'task_list', 'task_claim', 'task_submit',
     'task_close', 'task_park', 'task_revise', 'task_drop', 'task_amend',
 }
@@ -130,12 +130,12 @@ def main():
         assert init['capabilities'] == {'tools': {'listChanged': False}}
         client.write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         listed = client.rpc('tools/list')['tools']
-        assert len(listed) == 20 and {tool['name'] for tool in listed} == EXPECTED
+        assert len(listed) == 22 and {tool['name'] for tool in listed} == EXPECTED
         for tool in listed:
             assert 'session' in tool['inputSchema']['required']
             assert 'as' not in tool['inputSchema']['properties']
         report['tools'] = sorted(EXPECTED)
-        print('PASS initialize -> tools/list: 20 tools; session identity; no listen', flush=True)
+        print('PASS initialize -> tools/list: 22 tools; session identity; no listen', flush=True)
 
         def cli(*args):
             result = subprocess.run([str(REPO / 'bin/room'), *args], cwd=base, env=env,
@@ -164,6 +164,8 @@ def main():
         assert len(history) == 1 and history[0] == post
         assert client.tool('room_whiteboard_set', text='白板\nMCP') is None
         assert client.tool('room_whiteboard_get', 'mcp-b', room_id=room_id) == '白板\nMCP'
+        assert client.tool('room_neighbor_boards') == []          # 沒有接上的房
+        assert any(h['room_id'] == room_id for h in client.tool('room_hosts'))
         # mcp-b 領任務、交件就算回應了 @，提及的線頭已經自動關掉；再 @ 一次開一條新的來測關閉
         client.tool('room_say', text='再確認一次 @mcp-b')
         threads = client.tool('room_threads')

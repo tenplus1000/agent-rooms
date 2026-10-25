@@ -280,6 +280,21 @@ try:
     check("Shift 選兩間一起拖", moved[0] == moved[1] != 0 and moved[2] == moved[3] != 0)
     click(1300, 720); time.sleep(0.5)
     check("點空白處取消多選", js("S.multi.size") == 0)
+    # 拖到別間旁邊會吸上去：兩間接上、共用白板（各自只改自己的）
+    call("PUT", f"/api/rooms/{r1}/whiteboard", text="甲的規矩")
+    ov = call("GET", "/api/overview"); p1 = next(r for r in ov["rooms"] if r["room_id"] == r1)["pos"]
+    p2 = next(r for r in ov["rooms"] if r["room_id"] == r2)["pos"]
+    kk = js("S.view.k"); a = center(f'[data-room="{r2}"] polygon[style*="pointer"]')
+    want = [p1[0] + 150 * 0.866 + 25, p1[1] + 75 - 20]                        # 差一點點也會吸過去
+    drag(a, [a[0] + (want[0] - p2[0]) * kk, a[1] + (want[1] - p2[1]) * kk]); time.sleep(1.5)
+    ov = call("GET", "/api/overview")
+    check("拖近就吸上去、兩間接上", r2 in next(r for r in ov["rooms"] if r["room_id"] == r1).get("neighbors", {}))
+    check("接上的房標出共用白板", js(f"!!document.querySelector('[data-linked=\"{r2}\"]')"))
+    shot("吸上去的兩間")
+    js("showBoard('%s'), 0" % r2); time.sleep(0.8)
+    check("白板框列出隔壁的白板", "甲的規矩" in (js("document.querySelector('.dialog .board-near') && document.querySelector('.dialog .board-near').innerText") or ""))
+    shot("接上的房")
+    key("Escape"); time.sleep(0.4)
     # 下線的人：狀態列有「下線 N」，打開整理、收起來
     call("POST", "/api/register", session="a5", kind="codex", name="閒人")
     call("POST", "/api/off", session="a5", on=1); time.sleep(3.2)

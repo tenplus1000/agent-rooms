@@ -55,6 +55,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 .room-sub { fill: var(--dim); font-size: 11px; user-select: none; }
 .dot-label { fill: var(--dim); font-size: 11px; pointer-events: none; user-select: none; }
 .dot { cursor: grab; }
+[data-room].snap polygon { stroke: var(--cube-sel); stroke-width: 2.5; stroke-opacity: 1; }
 .dot .glow { animation: breathe 2.6s ease-in-out infinite; }
 @keyframes breathe { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 .pile { cursor: pointer; }
@@ -98,6 +99,8 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
   border-radius: 6px; padding: 7px 9px; font: inherit; margin-bottom: 10px; }
 .dialog .row { display: flex; gap: 8px; justify-content: flex-end; }
 .dialog.wide { width: min(720px, 94vw); }
+.dialog p.board-near { background: var(--bg); border: 1px dashed var(--line); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.dialog p.board-near ~ textarea.board-edit { height: 34vh; }
 .dialog textarea.board-edit { height: 55vh; resize: vertical; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
 .pick { max-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; }
 .pick div { padding: 6px 9px; cursor: pointer; }
@@ -148,6 +151,9 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 // ── 狀態 ─────────────────────────────────────────
 const S = { ov: null, sel: null, mode: null, wins: {}, layers: [], desks: {}, drag: null, view: null };
 const W = 150, D = 150, H = 100, COS = 0.866, SIN = 0.5;          // 立方體尺寸與等角投影
+// 接上別間的六個位置（跟核心的 NEIGHBOR_SIDES 一樣）：地板四個方向＋上下疊；拖到離其中一個這麼近就吸過去
+const SIDES = [[W * COS, W * SIN], [-W * COS, -W * SIN], [-D * COS, D * SIN], [D * COS, -D * SIN], [0, -H], [0, H]];
+const SNAP = 60;
 const store = {
   get(k, d) { try { const v = localStorage.getItem("rooms." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem("rooms." + k, JSON.stringify(v)); } catch (e) {} },
@@ -313,7 +319,9 @@ function render() {
   if (S.dragging) { S.dirty = true; return; }               // 拖曳中不重畫，放開才畫（不然會彈回原位）
   const svg = $("svg"); svg.replaceChildren(defs());
   const overlay = $("overlay"); overlay.replaceChildren();
-  rooms().forEach((r, i) => drawRoom(svg, overlay, r, roomPos(r, i)));
+  // 由後往前畫（畫面上越上面的越後面），接上的房才不會被後面那間蓋住
+  rooms().map((r, i) => [r, roomPos(r, i)]).sort((a, b) => a[1][1] - b[1][1] || a[1][0] - b[1][0])
+    .forEach(([r, pos]) => drawRoom(svg, overlay, r, pos));
   drawOutside();
   updateTarget(); placeRoombar();
   for (const id of Object.keys(S.wins)) if (!S.ov.rooms.find(r => r.room_id === id)) closeWin(id);
@@ -372,6 +380,9 @@ function drawRoom(svg, overlay, r, [px, py]) {
   g.append(label);
   g.append(el("text", { x: lx, y: ly - 11, class: "room-sub", "text-anchor": "middle",
     text: `${r.room_id}・${OWNER()} ${r.owner_name}${flags ? "・" + flags : ""}`, fill: r.paused ? "var(--warn)" : null }));
+  const linked = Object.keys(r.neighbors || {});
+  if (linked.length) g.append(el("text", { x: lx, y: ly + 4, class: "room-sub", "text-anchor": "middle", fill: "var(--cube-sel)",
+    "data-linked": r.room_id, text: `共用白板：${linked.join("、")}` }));
   svg.append(g);
   drawBubble(overlay, r, px + lx, py + ly - 50);
 }
@@ -555,16 +566,20 @@ function msgEl(e) {
         woke ? el("span", { class: "wake", text: `　叫醒 ${woke}` }) : null),
       document.createTextNode(e.text));
   }
-  const words = { join: "進了房間", leave: "離開房間", whiteboard: "改了白板", off: "下線了", on: "回到線上",
+  const words = { join: "進了房間", leave: "離開房間", whiteboard: e.neighbor ? `改了隔壁 ${e.neighbor_name} 的白板` : "改了白板", off: "下線了", on: "回到線上",
     room_created: "開了這間房", room_renamed: `把房名改成 ${e.name}`, owner: `把${OWNER()}換成 ${e.owner_name}`,
+    linked: `把這間跟 ${e.other_name}（${e.other}）接上了，共用白板`, unlinked: `把這間跟 ${e.other_name}（${e.other}）拉開了`,
     paused: e.text, delivery: `〔送不到〕${e.detail || ""}`, task: `任務 ${e.task_id} ${e.action}：${e.objective || ""}` };
   return el("div", { class: "msg sys", text: `${at}　${e.from_name} ${words[e.type] || e.type}` });
 }
 async function showBoard(roomId) {
   let text;
-  try { text = await api("GET", `/api/rooms/${roomId}/whiteboard`); }
+  let near = [];
+  try { [text, near] = await Promise.all([api("GET", `/api/rooms/${roomId}/whiteboard`), api("GET", `/api/rooms/${roomId}/neighbors`)]); }
   catch (e) { return dialog({ title: "白板", text: "（讀不到：" + e.message + "）", ok: "關閉", cancel: null }); }
-  const next = await dialog({ title: "白板", area: "（空的）寫下這間房的規矩與現況", value: text || "", ok: "存檔" });
+  const shared = near.map(n => `── 隔壁 ${n.name}（${n.room_id}）的白板：只能看 ──\n${n.whiteboard || "（空的）"}`).join("\n\n");
+  const next = await dialog({ title: near.length ? "白板（下面是這間的，可以改）" : "白板", text: shared || null, pre: true,
+    area: "（空的）寫下這間房的規矩與現況", value: text || "", ok: "存檔" });
   if (next === null || next === (text || "")) return;
   act(api("POST", `/api/rooms/${roomId}/whiteboard`, { text: next }), "白板存好了");
 }
@@ -678,15 +693,34 @@ function startRoomDrag(e, r) {
       if (it.g) it.g.setAttribute("transform", `translate(${it.px + dx},${it.py + dy})`);
       if (it.bubble) it.bubble.style.transform = `translate(${dx}px,${dy}px)`;
     } };
-  const move = ev => { dx = (ev.clientX - sx) / k; dy = (ev.clientY - sy) / k;
-    if (Math.abs(dx) + Math.abs(dy) > 4 / k) moved = true;
+  // 吸附：拖的那間很靠近別間某一面（地板四個方向或上下疊）就直接接上去；接上的兩間共用白板
+  const lead = group.find(it => it.r.room_id === r.room_id);
+  const others = list.filter(x => !ids.includes(x.room_id)).map(x => [x, roomPos(x, list.indexOf(x))]);
+  let snapTo = null;
+  const aim = ev => {
+    dx = (ev.clientX - sx) / k; dy = (ev.clientY - sy) / k;
+    const cx = lead.px + dx, cy = lead.py + dy; let best = null;
+    for (const [x, [qx, qy]] of others) for (const [ox, oy] of SIDES) {
+      const d = Math.hypot(cx - (qx + ox), cy - (qy + oy));
+      if (d < SNAP && (!best || d < best.d)) best = { d, id: x.room_id, x: qx + ox, y: qy + oy };
+    }
+    if (best) { dx = best.x - lead.px; dy = best.y - lead.py; }
+    if ((best && best.id) !== snapTo) {
+      document.querySelectorAll("[data-room].snap").forEach(n => n.classList.remove("snap"));
+      snapTo = best && best.id;
+      if (snapTo) document.querySelector(`[data-room="${snapTo}"]`)?.classList.add("snap");
+    }
+  };
+  const move = ev => { aim(ev);
+    if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 4) moved = true;
     if (moved && !frame) frame = requestAnimationFrame(paint); };        // 一格畫面只更新一次
   const up = ev => {
     removeEventListener("pointermove", move); removeEventListener("pointerup", up);
     if (frame) cancelAnimationFrame(frame);
     S.dragging = false;
     if (!moved) { S.dirty = false; if (shift) return had ? toggleMulti(r.room_id) : render(); return selectRoom(r.room_id); }
-    dx = (ev.clientX - sx) / k; dy = (ev.clientY - sy) / k;
+    aim(ev);
+    document.querySelectorAll("[data-room].snap").forEach(n => n.classList.remove("snap"));
     // 整組一起位移，不讓任何一間跑到左上邊界外
     const minX = Math.min(...group.map(it => it.px)), minY = Math.min(...group.map(it => it.py));
     dx = Math.max(dx, -minX); dy = Math.max(dy, -minY);
@@ -852,7 +886,8 @@ function dialog({ title, text, input, area, value = "", ok = "好", cancel = "�
   return new Promise(resolve => {
     let chosen = null;
     const box = el("div", { class: "dialog" }, el("h3", { text: title }));
-    if (text) box.append(el("p", { text, style: pre ? "white-space:pre-wrap;max-height:50vh;overflow:auto;color:var(--text)" : null }));
+    if (text) box.append(el("p", { text, class: area ? "board-near" : null,
+      style: pre ? `white-space:pre-wrap;max-height:${area ? 28 : 50}vh;overflow:auto;color:var(--text)` : null }));
     let field = null;
     if (input) { field = el("input", { placeholder: input }); field.value = value; box.append(field); }
     if (area) { input = area; field = el("textarea", { placeholder: area, class: "board-edit" }); field.value = value; box.append(field); box.classList.add("wide"); }

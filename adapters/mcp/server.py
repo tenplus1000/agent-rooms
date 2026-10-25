@@ -44,6 +44,8 @@ TOOLS = [
     tool('room_say', '向房間發送文字。', {'room_id': ROOM, 'text': TEXT}, ('text',)),
     tool('room_whiteboard_get', '讀取白板。', {'room_id': ROOM}),
     tool('room_whiteboard_set', '設定白板。', {'room_id': ROOM, 'text': TEXT}, ('text',)),
+    tool('room_neighbor_boards', '讀取畫面上跟這間接上的房的白板（只能看，不能改）。', {'room_id': ROOM}),
+    tool('room_hosts', '列出各房的負責人；負責人在 room_say 裡 @對方名字（或房號）會送到對方房。'),
     tool('room_threads', '列出線頭。', {'room_id': ROOM, 'all': field('boolean', 'true 包含已關閉線頭，預設 false。')}),
     tool('room_thread_close', '關閉指定線頭。', {'thread_id': field('string', '線頭 thread_id，例如 L1。'), 'note': NOTE}, ('thread_id',)),
     tool('room_moves', '查詢自己的移動紀錄。'),
@@ -63,6 +65,7 @@ ROOM_ROUTES = {
     'room_who': ('GET', ''), 'room_read': ('GET', '/history'),
     'room_say': ('POST', '/post'), 'room_whiteboard_get': ('GET', '/whiteboard'),
     'room_whiteboard_set': ('PUT', '/whiteboard'), 'room_threads': ('GET', '/threads'),
+    'room_neighbor_boards': ('GET', '/neighbors'),
     'task_new': ('POST', '/tasks'), 'task_list': ('GET', '/tasks'),
 }
 
@@ -140,6 +143,8 @@ def invoke(name, arguments):
         return http('POST', '/api/move', session=session, room_id=room_id, **actor)
     if name == 'room_leave':
         return http('POST', '/api/move', session=session, room_id=None, **actor)
+    if name == 'room_hosts':
+        return http('GET', '/api/hosts', **actor)
     if name in ('room_moves', 'room_dnd'):
         method, path = ('GET', '/api/moves') if name == 'room_moves' else ('POST', '/api/dnd')
         return http(method, path, session=session, **params, **actor)

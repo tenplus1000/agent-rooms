@@ -88,8 +88,14 @@ def line_for(event, room_name):
         return head + "進了房間"
     if kind == "leave":
         return head + "離開房間"
+    if kind == "whiteboard" and event.get("neighbor"):
+        return head + f"改了隔壁 {event['neighbor_name']}（{event['neighbor']}）的白板（room board 會一起列出）"
     if kind == "whiteboard":
         return head + "改了白板（room board 看內容）"
+    if kind == "linked":
+        return head + f"把這間跟 {event['other_name']}（{event['other']}）接上了：兩邊看得到對方的白板，各自只改自己的"
+    if kind == "unlinked":
+        return head + f"把這間跟 {event['other_name']}（{event['other']}）拉開了，不再共用白板"
     if kind == "delivery":
         return head + f"〔送不到 {event['from_name']}〕{event['detail']}"
     if kind == "off":
@@ -142,7 +148,8 @@ def acc_session(session):
 RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
 - 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@{user_id} 找 {user}）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
-- {owner_label}另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的成員（背景跑、不用 {user} 開視窗；帳號是 Claude 帳號時可加 `--model`、`--effort`）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）。
+- {owner_label}另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的成員（背景跑、不用 {user} 開視窗；帳號是 Claude 帳號時可加 `--model`、`--effort`）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）；`hosts` 看各房的{owner_label}，`say` 裡 @別房{owner_label}的名字（或直接 @房號）會送到他的房間、叫醒他，用來跟別房協調。
+- `board` 會一起列出畫面上跟這間接上的房的白板：看得到，只能改自己的。
 - 收到成員或別的對話的回報（交件、做完、卡住），回 {user} 的第一句就講誰回報了什麼，不要混在別的狀態裡。
 - 轉達給不在房裡的對話（例如用 SendMessage）時，附上 {user} 原話的時間和你的 session id，對方才查得到那是 {user} 交代的。
 - 等成員回報時，不要用 sleep、until 這類會卡住的指令等，也不用開 Monitor：指令跑著的時候房間訊息進不來；有人交件、回報或找你，房間會在你這一輪結束後叫醒你。
@@ -164,7 +171,7 @@ RESIDENT_RULES = """你是 {user} 的常駐代理，在房間工具裡是全域�
 
 CODEX_RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
-- 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@{user_id} 找 {user}）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。
+- 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@{user_id} 找 {user}）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板（`room_neighbor_boards` 看畫面上接上的房的白板，只能看）、`room_hosts` 看各房{owner_label}（{owner_label}在 `room_say` 裡 @別房{owner_label}會送到他的房間）、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。
 {maintainer_line}- 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
 
@@ -457,6 +464,7 @@ def main(argv=None):
     s = sub.add_parser("say"); s.add_argument("text")
     s = sub.add_parser("board"); s.add_argument("--set", metavar="FILE", help="用檔案內容取代白板（- 是 stdin）")
     s = sub.add_parser("threads"); s.add_argument("--all", action="store_true")
+    sub.add_parser("hosts", help="各房的負責人：負責人 say 裡 @對方名字（或房號）就會送到對方房")
     s = sub.add_parser("close-thread"); s.add_argument("thread_id"); s.add_argument("--note", default="")
     s = sub.add_parser("off", help="把成員標成下線（做完了、視窗關了）：不叫醒，訊息留著")
     s.add_argument("target", nargs="?", help="名字或 session；不填就是自己"); s.add_argument("--reason", default="")
@@ -599,6 +607,13 @@ def main(argv=None):
             text = sys.stdin.read() if a.set == "-" else open(a.set, encoding="utf-8").read()
             return show(call("PUT", f"/api/rooms/{room}/whiteboard", actor, text=text))
         print(call("GET", f"/api/rooms/{room}/whiteboard", actor))
+        for n in call("GET", f"/api/rooms/{room}/neighbors", actor):
+            print(f"\n── 隔壁（{n['side']}）{n['name']}（{n['room_id']}，{OWNER_LABEL} {n['owner_name']}）的白板：只能看 ──")
+            print(n["whiteboard"] or "（空的）")
+        return
+    if a.cmd == "hosts":
+        for h in call("GET", "/api/hosts", actor):
+            print(f"{h['room_id']} {h['name']}｜{OWNER_LABEL} {h['owner_name'] or '（沒有）'}")
         return
     if a.cmd == "threads":
         return show(call("GET", f"/api/rooms/{room}/threads", actor, all="1" if a.all else None))
