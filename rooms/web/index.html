@@ -453,6 +453,7 @@ function tidyPanel() {
   };
   const btn = (text, fn) => el("button", { text, on: { click: e => { e.stopPropagation(); fn(); } } });
   function fill() {
+    const old = pop.querySelector(".tidy-list"), keep = [old ? old.scrollTop : 0, pop.scrollTop];   // 每次更新都重畫：捲到哪裡要留著
     pop.replaceChildren();
     const all = offline(), hinted = all.filter(a => (a.shelve_hint || {}).suggest);
     const off = all.filter(a => !hinted.includes(a)), loose = off.filter(a => !a.room_id), inRoom = off.filter(a => a.room_id);
@@ -509,6 +510,7 @@ function tidyPanel() {
     }
     if (!list.children.length) list.append(el("div", { class: "sub", text: "沒有下線的人" }));
     pop.append(list);
+    list.scrollTop = keep[0]; pop.scrollTop = keep[1];
   }
   fill();
   const anchor = document.querySelector("[data-tidy]");
