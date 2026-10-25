@@ -5,7 +5,7 @@ import threading
 import time
 import unittest
 
-from rooms.core import USER, Core, RoomError
+from rooms.core import USER, USER_NAME, Core, RoomError
 
 
 class CoreTest(unittest.TestCase):
@@ -25,6 +25,17 @@ class CoreTest(unittest.TestCase):
         return self.core.listen(session, wait=0)["events"]
 
     # ── 房間、移動、知識邊界 ─────────────────────────────
+
+    def test_only_user_deletes_an_empty_room_and_keeps_its_log(self):
+        with self.assertRaises(RoomError):
+            self.core.delete_room("s-claude", self.room)                   # 負責人不能刪
+        with self.assertRaises(RoomError):
+            self.core.delete_room(USER, self.room)                          # 還有人在
+        for sid in list(self.core._members(self.room)):
+            self.core.move(sid, sid, None)
+        self.core.delete_room(USER, self.room)
+        self.assertEqual(self.core.list_rooms(USER), [])
+        self.assertEqual(len(list((self.core.data / "rooms" / "deleted").glob("*.jsonl"))), 1)
 
     def test_owner_or_user_renames_room(self):
         self.assertEqual(self.core.rename_room("s-claude", self.room, " 桌遊社 ")["name"], "桌遊社")
@@ -101,7 +112,7 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(self.core.threads("s-claude", self.room), [])
 
     def test_mentioning_user_lights_the_room(self):
-        self.core.post("s-claude", self.room, "@user 這裡要你決定")
+        self.core.post("s-claude", self.room, f"@{USER} 這裡要你決定")
         self.assertEqual(self.core.room(USER, self.room)["lit"], 1)
         thread = self.core.threads(USER, self.room)[0]
         self.assertTrue(thread["needs_user"])
@@ -111,7 +122,7 @@ class CoreTest(unittest.TestCase):
     def test_every_event_says_who_said_it(self):
         self.core.post(USER, self.room, "嗨")
         event = self.core.history("s-claude", self.room)[-1]
-        self.assertEqual((event["from"], event["from_name"], event["room_id"]), (USER, "使用者", self.room))
+        self.assertEqual((event["from"], event["from_name"], event["room_id"]), (USER, USER_NAME, self.room))
 
     # ── 監聽與勿擾 ─────────────────────────────────────
 

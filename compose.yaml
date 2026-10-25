@@ -3,7 +3,11 @@ services:
     build: .
     # 用主機使用者的身分寫資料，資料夾裡的檔案才不會變成 root 的
     user: "${ROOMS_UID:-1000}:${ROOMS_GID:-1000}"
-    # 判官（沒 @ 的訊息在找誰）：金鑰從啟動時的 shell 帶進來；ROOMS_JUDGE=off 可關掉
+    # 本機設定（使用者是誰等）：repo 根目錄的 local.env，沒有也沒關係
+    env_file:
+      - path: local.env
+        required: false
+    # 判官：金鑰從啟動時的 shell 帶進來；ROOMS_JUDGE=off 可關掉
     environment:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       ROOMS_JUDGE: ${ROOMS_JUDGE:-}

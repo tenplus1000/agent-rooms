@@ -5,13 +5,13 @@ Claude 不經過這裡：每一輪結束時 Stop hook 在背景等房間、有�
 每個 Codex 一條執行緒：
   1. 對核心長輪詢（只等「該叫醒他」的事件，不推進游標、不算心跳）
   2. 找出這個對話在哪：桌面版、或 WSL 的哪個 Codex 帳號
-  3. 問狀態：閒著 → turn/start；正在跑 → turn/steer，但那一輪是 使用者 剛開的（他三分鐘內在那個
+  3. 問狀態：閒著 → turn/start；正在跑 → turn/steer，但那一輪是使用者剛開的（他三分鐘內在那個
      對話講過話）就等它跑完再送，不插進他的對話；視窗關了（notLoaded、也沒有程式開著它）→
-     標成下線、只留訊息，不替他跑一輪、不花額度。使用者 回到那個對話打字（acc 的 last_seen 更新）
+     標成下線、只留訊息，不替他跑一輪、不花額度。使用者回到那個對話打字（acc 的 last_seen 更新）
      就標回線上，留著的一起補送。做完的成員由負責人用 `room off` 標下線，效果一樣。
-     負責人或 使用者 用 `room on` 叫回來的、或 `room spawn` 開的（headless）→ 沒有視窗也在背景載入送進去；
+     負責人或使用者用 `room on` 叫回來的、或 `room spawn` 開的（headless）→ 沒有視窗也在背景載入送進去；
      其他（額度用完、桌面版沒開）→ 記錄、亮燈、過一陣子再試
-  5. 送成功才 ack；送出後結果不確定 → 也 ack（不自動重送），記錄並亮燈，請 使用者 查紀錄
+  5. 送成功才 ack；送出後結果不確定 → 也 ack（不自動重送），記錄並亮燈，請使用者查紀錄
 
 每一次叫醒、插話、延後、擋下都寫進核心的 deliveries.jsonl。
 """
@@ -29,6 +29,7 @@ import urllib.parse
 import urllib.request
 
 from rooms import paths
+from rooms.identity import USER, USER_NAME
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = os.environ.get("ROOMS_URL", "http://127.0.0.1:8775")
@@ -53,8 +54,8 @@ SPAWN_ORDER = [n for n in os.environ.get("ROOMS_SPAWN_ACCOUNTS", "").split(":") 
 # 選用：放著 codexquota.py（read(codex_home) → 五小時／一週用量百分比）的資料夾，用來挑還有額度的帳號
 QUOTA_HELPER = os.environ.get("ROOMS_QUOTA_HELPER", "").strip()
 
-USER_IDLE = 180          # 使用者 講完話三分鐘內不插進那個對話
-OWN_ECHO = 20             # 我們自己送進去的那一輪也會觸發 hook、更新 last_seen，這段時間內的不算 使用者
+USER_IDLE = 180          #使用者講完話三分鐘內不插進那個對話
+OWN_ECHO = 20             # 我們自己送進去的那一輪也會觸發 hook、更新 last_seen，這段時間內的不算使用者
 AFTER_CHECK = 8           # 送出後幾秒回頭確認那一輪有沒有跑起來
 CAP_PER_HOUR = 30         # 每個 agent 每小時最多被房間叫醒幾次
 BACKOFF = {"unavailable": 600, "desktop_closed": 300, "race": 3, "error": 60, "detached": 60, "user_turn": 5}
@@ -207,7 +208,7 @@ def adapter(kind, sock, request):
 
 
 def last_seen(session):
-    """使用者 最後一次在這個對話講話的時間（acc 的 last_seen，每次 UserPromptSubmit 都會更新）。"""
+    """使用者最後一次在這個對話講話的時間（acc 的 last_seen，每次 UserPromptSubmit 都會更新）。"""
     try:
         with open(os.path.join(ACC_SESSIONS, session + ".json"), encoding="utf-8") as fh:
             return datetime.datetime.fromisoformat(json.load(fh)["last_seen"]).timestamp()
@@ -216,7 +217,7 @@ def last_seen(session):
 
 
 def user_active(session, last_sent):
-    """使用者 剛在這個對話講過話嗎？回還剩幾秒（0 是沒有）。"""
+    """使用者剛在這個對話講過話嗎？回還剩幾秒（0 是沒有）。"""
     seen = last_seen(session)
     if not seen:
         return 0
@@ -230,7 +231,7 @@ def render(room, session, events):
     """送進 Codex 的內容：房間規則（它沒有房間 hook）＋這一批訊息。"""
     from rooms.cli import CODEX_RULES as RULES, line_for, maintainer_line
     me = next((m for m in room["members"] if m["session"] == session), {"name": session[:8]})
-    rules = RULES.format(room=room["name"], room_id=room["room_id"], name=me["name"], owner=room["owner_name"],
+    rules = RULES.format(user=USER_NAME, user_id=USER, room=room["name"], room_id=room["room_id"], name=me["name"], owner=room["owner_name"],
                          session=session, room_cmd=os.path.join(ROOT, "bin", "room"),
                          maintainer_line=maintainer_line(call("GET", "/api/overview")))
     lines = [line_for(e, room["name"]) for e in events]
@@ -245,9 +246,9 @@ class Worker(threading.Thread):
         self.last_sent = 0
         self.stop = False
         self.reported = None      # 這一批送不到已經通知過了（重試時不再洗版）
-        self.headless = None      # 負責人或 使用者 要他沒開視窗也做事（room on／room spawn）
-        self.held = None          # 這一批已經記過「等 使用者 那一輪」了
-        self.user_seen = last_seen(session)   # 已經回報過的 使用者 最後一次在這個對話講話的時間
+        self.headless = None      # 負責人或使用者要他沒開視窗也做事（room on／room spawn）
+        self.held = None          # 這一批已經記過「等使用者那一輪」了
+        self.user_seen = last_seen(session)   # 已經回報過的使用者最後一次在這個對話講話的時間
 
     def note(self, action, detail, light=False, notify=()):
         log(self.session[:8], action, detail)
@@ -279,9 +280,9 @@ class Worker(threading.Thread):
                            consume=0, heartbeat=0)
                 off = got.get("off")
                 if off and last_seen(self.session) > off["at"] + OWN_ECHO:
-                    # 使用者 回到這個對話打字了：標回線上，留著的訊息下一圈就補送
+                    #使用者回到這個對話打字了：標回線上，留著的訊息下一圈就補送
                     call("POST", "/api/off", session=self.session, on=0, **{"as": self.session})
-                    self.note("online", "使用者 回到這個對話了，標回線上，補送留著的訊息")
+                    self.note("online", "使用者回到這個對話了，標回線上，補送留著的訊息")
                     continue
                 if not got["events"]:
                     continue
@@ -301,12 +302,12 @@ class Worker(threading.Thread):
                 time.sleep(BACKOFF["error"])
 
     def check_user(self):
-        """使用者 在這個 Codex 對話裡講話了（不是我們送進去的那一輪）：告訴核心他在場，互相 @ 的計數歸零。"""
+        """使用者在這個 Codex 對話裡講話了（不是我們送進去的那一輪）：告訴核心他在場，互相 @ 的計數歸零。"""
         seen = last_seen(self.session)
         if seen > self.user_seen and not (self.last_sent and abs(seen - self.last_sent) < OWN_ECHO):
             got = call("POST", "/api/user_here", session=self.session)
             if got.get("resumed"):
-                self.note("resumed", "使用者 在這個對話講話了，房間解除暫停")
+                self.note("resumed", "使用者在這個對話講話了，房間解除暫停")
         self.user_seen = max(self.user_seen, seen)
 
     def deliver(self, room_id, events):
@@ -329,9 +330,9 @@ class Worker(threading.Thread):
         call("POST", "/api/touch", session=self.session)
         status = (state.get("threadRuntimeStatus") or {}).get("type")
         if status == "active" and user_active(self.session, self.last_sent):
-            # 正在跑的是 使用者 剛開的那一輪：不插進去，等它跑完（閒下來）馬上送
+            # 正在跑的是使用者剛開的那一輪：不插進去，等它跑完（閒下來）馬上送
             if self.held != events[-1]["seq"]:
-                self.note("delayed", "使用者 正在跟它講話，等那一輪跑完再送")
+                self.note("delayed", "使用者正在跟它講話，等那一輪跑完再送")
                 self.held = events[-1]["seq"]
             time.sleep(BACKOFF["user_turn"])
             return
@@ -348,9 +349,9 @@ class Worker(threading.Thread):
             method = "turn/start"            # 轉接器會先在背景載入（thread/resume）再送
             why += "，背景載入（" + ("房間開的" if self.headless.get("spawned") else "被叫回來的") + "）"
         elif status == "notLoaded":
-            # 視窗關了：使用者 關掉就是不要它跑。標下線、訊息留著，他回到那個對話打字時才補送
+            # 視窗關了：使用者關掉就是不要它跑。標下線、訊息留著，他回到那個對話打字時才補送
             call("POST", "/api/off", session=self.session, on=1, reason="視窗關了", **{"as": self.session})
-            self.note("offline", f"視窗關了，標成下線；{len(events)} 則訊息留著，使用者 回到那個對話打字時補送")
+            self.note("offline", f"視窗關了，標成下線；{len(events)} 則訊息留著，使用者回到那個對話打字時補送")
             return
         else:
             self.fail("unavailable", f"對話狀態是 {status}（可能是額度用完），訊息留著，之後會再試", events)

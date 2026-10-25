@@ -10,7 +10,7 @@ from http.server import ThreadingHTTPServer
 from unittest import mock
 
 from rooms import cli, dispatch
-from rooms.core import MAX_HOPS, USER, Core
+from rooms.core import MAX_HOPS, USER, USER_NAME, Core
 from rooms.server import make_handler
 
 
@@ -84,7 +84,7 @@ class WakeTest(unittest.TestCase):
         self.assertEqual(self.wake_of(event), ["s-a"])                    # 判官叫不到也不亂叫負責人
 
     def test_report_to_user_reaches_the_owner(self):
-        event, _ = self.judged_post("s-a", "@user 重算完成，結果在 out.txt", {"b": 0.1, "主持": 0.42})
+        event, _ = self.judged_post("s-a", f"@{USER} 重算完成，結果在 out.txt", {"b": 0.1, "主持": 0.42})
         self.assertEqual(self.wake_of(event), ["s-boss"])                 # 使用者 不在房裡，靠負責人轉
 
     def test_user_without_mention_talks_to_the_owner(self):
@@ -161,9 +161,9 @@ class WakeTest(unittest.TestCase):
         self.assertTrue(self.core.user_here("s-boss")["resumed"])
         self.assertEqual(self.core.post("s-a", self.room, "@b 繼續")["wake"], ["s-b"])
         self.assertEqual(self.core.room(USER, self.room)["lit"], 0)
-        self.core.post("s-a", self.room, "@user 這個要你決定")
+        self.core.post("s-a", self.room, f"@{USER} 這個要你決定")
         self.core.user_here("s-a")
-        self.assertEqual(self.core.room(USER, self.room)["lit"], 1)  # @user 的問題他還沒回，燈留著
+        self.assertEqual(self.core.room(USER, self.room)["lit"], 1)  # @使用者 的問題他還沒回，燈留著
 
     def keeper(self):
         self.core.register("s-m", "claude", "修房")
@@ -213,14 +213,14 @@ class WakeTest(unittest.TestCase):
         self.core.register("s-r", "claude", "管家")
         self.core.set_global(USER, "s-r", "resident", "總管")
         self.assertIn("s-r", self.core.post("s-a", self.room, "@總管 今天先做哪個")["wake"])
-        self.assertIn("s-r", self.core.post("s-a", self.room, "@user 這要你決定")["wake"])     # 在等使用者
+        self.assertIn("s-r", self.core.post("s-a", self.room, f"@{USER} 這要你決定")["wake"])     # 在等使用者
         self.core.record_delivery("s-a", "uncertain", "送出後結果不確定", light=True, notify=["s-boss"])
         self.pause()
         got = [e["type"] for e in self.core.listen("s-r", wait=0, triggers_only=True)["events"]]
         self.assertEqual(got, ["post", "post", "paused"])                       # 送不到是維修的事
         kinds = [e["type"] for e in self.core.listen("s-m", wait=0, triggers_only=True)["events"]]
         self.assertIn("delivery", kinds)
-        self.assertNotIn("@user 這要你決定", [e.get("text") for e in
+        self.assertNotIn(f"@{USER} 這要你決定", [e.get("text") for e in
                                              self.core.listen("s-m", wait=0)["events"]])   # 維修不收等使用者的事
 
     def test_global_roles_are_set_by_the_user_only_and_can_be_removed(self):
@@ -288,7 +288,7 @@ class HookTest(LiveServer):
         self.core.post(USER, self.room, "背景")
         context = self.run_hook("s-claude", "UserPromptSubmit")
         self.assertIn("你在房裡叫「主持」", context)
-        self.assertIn("【房間 房（R1）｜來自 使用者】背景", context)
+        self.assertIn(f"【房間 房（R1）｜來自 {USER_NAME}】背景", context)
         again = self.run_hook("s-claude", "UserPromptSubmit")
         self.assertNotIn("房間的新訊息", again)                          # 補過的不再補
 
@@ -339,7 +339,7 @@ class HookTest(LiveServer):
         self.core.set_global(USER, "s-m", "maintainer", "維修")
         self.core.post("s-cx", self.room, "@維修 送不到")
         context = self.run_hook("s-m", "UserPromptSubmit")
-        self.assertIn("你是 使用者 房間工具的維修", context)
+        self.assertIn(f"你是 {USER_NAME} 房間工具的維修", context)
         self.assertIn("各房間現況", context)
         self.assertIn("負責人 主持", context)
         self.assertIn("@維修 送不到", context)
@@ -359,7 +359,7 @@ class HookTest(LiveServer):
         self.core.register("s-r", "claude", "管家")
         self.core.set_global(USER, "s-r", "resident")
         context = self.run_hook("s-r", "UserPromptSubmit")
-        self.assertIn("你是 使用者 的常駐代理", context)
+        self.assertIn(f"你是 {USER_NAME} 的常駐代理", context)
         self.assertIn("「@工具人」找維修", context)
         self.assertIn("各房間現況", context)
 

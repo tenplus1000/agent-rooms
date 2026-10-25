@@ -1,6 +1,6 @@
 """房間核心的 HTTP JSON API，只用標準函式庫。
 
-身分放在 `as`（query 或 JSON body）：agent 填自己的 session id，使用者 填 user。
+身分放在 `as`（query 或 JSON body）：agent 填自己的 session id，使用者填 identity.USER（由設定決定）。
 目前只綁 127.0.0.1／container 內網，沒有登入；開給手機之前要先加 token。
 """
 
@@ -110,6 +110,8 @@ def make_handler(core):
                 room_id, sub = m.groups()
                 if sub is None and method == "GET":
                     return core.room(actor, room_id)
+                if sub == "delete" and method == "POST":
+                    return core.delete_room(actor, room_id)
                 if sub == "resume" and method == "POST":
                     return core.resume(actor, room_id)
                 if sub == "name" and method == "POST":

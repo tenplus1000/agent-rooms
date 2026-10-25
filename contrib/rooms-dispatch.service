@@ -1,0 +1,17 @@
+# 轉送程式的 systemd 使用者服務範本：開機（有 linger 時不用登入）就跑，掛了自己重開。
+# 安裝：把 ExecStart 和 log 路徑改成你的 repo 位置，放到 ~/.config/systemd/user/，然後
+#   systemctl --user daemon-reload && systemctl --user enable --now rooms-dispatch
+# 開機不用登入也要跑：loginctl enable-linger $USER
+[Unit]
+Description=agent-rooms dispatcher (wakes Codex members)
+After=default.target
+
+[Service]
+ExecStart=%h/agent-rooms/bin/rooms-dispatch
+Restart=always
+RestartSec=10
+StandardOutput=append:%h/agent-rooms/data/dispatch.log
+StandardError=append:%h/agent-rooms/data/dispatch.log
+
+[Install]
+WantedBy=default.target

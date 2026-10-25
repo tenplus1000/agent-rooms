@@ -19,6 +19,8 @@ import os
 import time
 import urllib.request
 
+from rooms.identity import USER_NAME
+
 URL = "https://openrouter.ai/api/alpha/decisions"
 MODEL = "typesafe/jev-1.13"
 THRESHOLD = 0.5
@@ -43,7 +45,7 @@ def _key():
 def state_of(room_name, roles, speaker, text, mentioned=(), context=()):
     """roles：[(名字, 在做什麼)]，說話的人也列在裡面（模型要知道誰是誰）。
     context：[(誰, 說了什麼)]，這則之前最近的幾則；mentioned：這則 @ 了誰。"""
-    lines = [f"房間「{room_name}」的成員（使用者 不在房裡，他透過負責人看房間）："]
+    lines = [f"房間「{room_name}」的成員（{USER_NAME} 不在房裡，透過負責人看房間）："]
     lines += [f"- {name}：{role}" for name, role in roles]
     if context:
         lines += ["", "最近的對話："] + [f"- {who}：「{said}」" for who, said in context]

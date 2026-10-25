@@ -46,3 +46,16 @@ def desktop_codex_sessions():
         return Path(given)
     home = windows_home()
     return home / ".codex" / "sessions" if home else None
+
+
+def load_local_env(root=None):
+    """把 repo 根目錄 local.env 裡的設定補進環境變數（環境裡已經有的不蓋掉）。給沒有經過 bin/ 包裝就啟動的程式用。"""
+    path = Path(root or Path(__file__).resolve().parent.parent) / "local.env"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        key, sep, value = line.strip().partition("=")
+        if sep and key and not key.startswith("#"):
+            os.environ.setdefault(key.strip(), value.strip())

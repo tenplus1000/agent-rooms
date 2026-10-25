@@ -1,10 +1,10 @@
-"""room：agent 與 使用者 用的命令列。跟 acc 一樣，agent 用 --session 帶自己的 session id。
+"""room：agent 與使用者用的命令列。跟 acc 一樣，agent 用 --session 帶自己的 session id。
 
   room join R1 --session <id>          進房（同時登記這個點）
   room say "@codex-1 看白板" --session <id>
   room listen --session <id>           一直等這間房的新訊息，一則一行（給 Claude 的 Monitor 用）
   room task submit T1 --note "..." --session <id>
-  room ... --user                      以 使用者 的身分
+  room ... --user                       以使用者的身分（也可以寫 --<使用者的 id>）
 """
 
 import argparse
@@ -15,6 +15,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from rooms.identity import USER, USER_NAME
+
+USER_FLAG = [f"--{USER}"] if USER != "user" else []   # 例如 --alex：使用者的 id 也能當旗標
 
 BASE = os.environ.get("ROOMS_URL", "http://127.0.0.1:8775")
 
@@ -52,8 +56,8 @@ def current_room(actor, given=None):
     if given:
         return given
     rooms = call("GET", "/api/rooms", actor)
-    if actor == "user":
-        sys.exit("使用者 要指定房間：--room R1")
+    if actor == USER:
+        sys.exit("使用者要指定房間：--room R1")
     # 維修看得到每一間，但不一定在哪一間裡：只認自己是成員的那間
     mine = [r for r in rooms if any(m["session"] == actor for m in r["members"])]
     if not mine:
@@ -133,32 +137,32 @@ def acc_session(session):
     return {}
 
 
-RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
-- 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 使用者 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
-- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@user 找 使用者）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
-- 負責人另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的 Codex 成員（背景跑、不用 使用者 開視窗）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）。
-- 收到成員或別的對話的回報（交件、做完、卡住），回 使用者 的第一句就講誰回報了什麼，不要混在別的狀態裡。
-- 轉達給不在房裡的對話（例如用 SendMessage）時，附上 使用者 原話的時間和你的 session id，對方才查得到那是 使用者 交代的。
+RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
+- 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
+- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@{user_id} 找 {user}）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
+- 負責人另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的 Codex 成員（背景跑、不用 {user} 開視窗）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）。
+- 收到成員或別的對話的回報（交件、做完、卡住），回 {user} 的第一句就講誰回報了什麼，不要混在別的狀態裡。
+- 轉達給不在房裡的對話（例如用 SendMessage）時，附上 {user} 原話的時間和你的 session id，對方才查得到那是 {user} 交代的。
 - 等成員回報時，不要用 sleep、until 這類會卡住的指令等，也不用開 Monitor：指令跑著的時候房間訊息進不來；有人交件、回報或找你，房間會在你這一輪結束後叫醒你。
 {maintainer_line}- 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
-MAINTAINER_RULES = """你是 使用者 房間工具的維修（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：專門改房間工具本身（{repo}）。你不用待在任何房間，每間房都看得到。
+MAINTAINER_RULES = """你是 {user} 房間工具的維修（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：專門改房間工具本身（{repo}）。你不用待在任何房間，每間房都看得到。
 - 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
-- 管理：`move <名字> <房號|none>`、`rename <名字> <新名字>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`title <房號> <新房名>`、`resume`（解除暫停）、`create <房名> --owner <名字>`（開普通房、指定主持，你不進去）；要開維修房就 `create <房名>` 再 `join`，你自己當主持。你不能用 使用者 的身分發言，回話都是你自己。
+- 管理：`move <名字> <房號|none>`、`rename <名字> <新名字>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`title <房號> <新房名>`、`delete <房號>`（房裡沒人時刪房，紀錄會封存）、`resume`（解除暫停）、`create <房名> --owner <名字>`（開普通房、指定主持，你不進去）；要開維修房就 `create <房名>` 再 `join`，你自己當主持。你不能用 {user} 的身分發言，回話都是你自己。
 - 有人 @維修、房間暫停、訊息送不到，都會叫醒你：先看那間房的紀錄判斷是房間工具的問題還是那間房自己的事；是工具的問題就修，修完 commit、重建核心（`docker compose up -d --build`）、需要時重啟轉送程式，實測過再回那間房說一聲。
 - 改動照 repo 的慣例：設計理由寫 docs/，commit 訊息不寫私人專案名；commit 後會自動推工作 repo 並同步公開版。
 - 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
 
-RESIDENT_RULES = """你是 使用者 的常駐代理，在房間工具裡是全域角色（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：掌握全局——使用者 現在在忙什麼、每間房在做什麼、誰卡住或在等 使用者。你不用待在任何房間，每間房都看得到。
+RESIDENT_RULES = """你是 {user} 的常駐代理，在房間工具裡是全域角色（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：掌握全局——{user} 現在在忙什麼、每間房在做什麼、誰卡住或在等 {user}。你不用待在任何房間，每間房都看得到。
 - 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
-- 派房：`create <房名> --owner <名字>`（開房、指定主持，你不進去）、`move <名字> <房號|none>`、`spawn <名字> "<派工>" --role "<在做什麼>" --room <房號>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`resume`。你不能用 使用者 的身分發言，回話都是你自己。
+- 派房：`create <房名> --owner <名字>`（開房、指定主持，你不進去）、`move <名字> <房號|none>`、`spawn <名字> "<派工>" --role "<在做什麼>" --room <房號>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`resume`。你不能用 {user} 的身分發言，回話都是你自己。
 - 你不改任何程式、不修房間工具；房間工具的問題寫「@{maintainer}」找維修，專案的實作交給該房的主持或成員。
-- 有人 @你、有人 @user（在等 使用者）、房間暫停，都會叫醒你；其他事你每一輪會在總覽裡看到。
+- 有人 @你、有人 @{user_id}（在等 {user}）、房間暫停，都會叫醒你；其他事你每一輪會在總覽裡看到。
 - 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
 
-CODEX_RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
-- 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 使用者 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
-- 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@user 找 使用者）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。
+CODEX_RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
+- 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
+- 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@{user_id} 找 {user}）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。
 {maintainer_line}- 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
 
@@ -184,13 +188,13 @@ def hook():
         me = room and next(m for m in room["members"] if m["session"] == session)
         if not me:
             return
-        # 房間叫醒那一輪也會觸發 UserPromptSubmit（task-notification），那不是 使用者 開口
+        # 房間叫醒那一輪也會觸發 UserPromptSubmit（task-notification），那不是使用者開口
         user_typed = full and "<task-notification>" not in str(payload.get("prompt", ""))[:200]
         if user_typed:
-            _quick("POST", "/api/user_here", {"session": session})   # 使用者 在場：互相 @ 的計數歸零
+            _quick("POST", "/api/user_here", {"session": session})   #使用者在場：互相 @ 的計數歸零
         if user_typed and me.get("off"):
-            _quick("POST", "/api/off", {"as": session, "session": session, "on": "0"})   # 使用者 回到這個對話了
-        # 使用者開口那一輪：把累積的都補上；做事中途：只有該叫醒他時才插話
+            _quick("POST", "/api/off", {"as": session, "session": session, "on": "0"})   #使用者回到這個對話了
+        #使用者開口那一輪：把累積的都補上；做事中途：只有該叫醒他時才插話
         got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "1",
                                             "triggers_only": "0" if full else "1"})
         lines = [line_for(e, room["name"]) for e in (got or {}).get("events", [])]
@@ -202,7 +206,7 @@ def hook():
                     session=session, room_cmd=room_cmd, maintainer_line=maintainer_line(overview))
         parts = []
         if full:
-            parts.append((CODEX_RULES if me["kind"] == "codex" else RULES).format(**info))
+            parts.append((CODEX_RULES if me["kind"] == "codex" else RULES).format(**info, user=USER_NAME, user_id=USER))
         if lines:
             parts.append("房間的新訊息：\n" + "\n".join(lines))
         if not parts or (not full and not lines):
@@ -244,7 +248,7 @@ def global_hook(session, event_name, full, overview):
         rules = MAINTAINER_RULES if g["kind"] == "maintainer" else RESIDENT_RULES
         keeper = next((call_of(s, k, overview) for s, k in overview["globals"].items() if k["kind"] == "maintainer"),
                       "維修")
-        parts.append(rules.format(name=me["name"], call=call_of(session, g, overview), session=session,
+        parts.append(rules.format(user=USER_NAME, user_id=USER, name=me["name"], call=call_of(session, g, overview), session=session,
                                   room_cmd=os.path.join(repo, "bin", "room"), repo=repo, maintainer=keeper))
         parts.append(summary_of(overview))
     if lines:
@@ -350,8 +354,8 @@ def spawn(actor, room_id, name, role, text, cwd, account=None):
     第一則由轉送程式送進去（帶房間規則），跟其他成員收訊息走同一條路。
     """
     room = call("GET", f"/api/rooms/{room_id}", actor)
-    if actor != "user" and room["owner"] != actor and actor not in call("GET", "/api/overview")["globals"]:
-        sys.exit("只有 使用者、全域角色或房間負責人能開新成員")
+    if actor != USER and room["owner"] != actor and actor not in call("GET", "/api/overview")["globals"]:
+        sys.exit("只有使用者、全域角色或房間負責人能開新成員")
     if not os.path.isdir(cwd):
         sys.exit(f"沒有這個資料夾：{cwd}")
     from rooms import dispatch
@@ -370,12 +374,12 @@ def spawn(actor, room_id, name, role, text, cwd, account=None):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="room", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--session", help="自己的 session id（agent 用）")
-    p.add_argument("--user", action="store_true", help="以 使用者 的身分")
+    p.add_argument("--user", *USER_FLAG, dest="as_user", action="store_true", help=f"以使用者（{USER_NAME}）的身分")
     p.add_argument("--room", help="指定房間；agent 不填就是自己所在的那間")
     # 同一組參數寫在子指令後面也收得到（agent 習慣寫在最後）
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--session", default=argparse.SUPPRESS)
-    common.add_argument("--user", action="store_true", default=argparse.SUPPRESS)
+    common.add_argument("--user", *USER_FLAG, dest="as_user", action="store_true", default=argparse.SUPPRESS)
     common.add_argument("--room", default=argparse.SUPPRESS)
     sub = p.add_subparsers(dest="cmd", required=True)
     _add = sub.add_parser
@@ -385,14 +389,15 @@ def main(argv=None):
     s = sub.add_parser("rename"); s.add_argument("target"); s.add_argument("name")
     s = sub.add_parser("create"); s.add_argument("name")
     s.add_argument("--owner", default=None, help="使用者／維修：指定負責人（名字或 session），自己不進去")
-    s = sub.add_parser("global", help="使用者 指定全域角色：maintainer（改房間工具）、resident（常駐代理，不改程式）")
+    s = sub.add_parser("global", help="使用者指定全域角色：maintainer（改房間工具）、resident（常駐代理，不改程式）")
     s.add_argument("target"); s.add_argument("kind", choices=["maintainer", "resident", "none"])
     s.add_argument("--alias", default="", help="房裡 @ 它的另一個叫法，例如「維修」")
+    s = sub.add_parser("delete", help="刪房間（使用者或全域角色；房裡要先沒人，紀錄會封存）"); s.add_argument("room_id")
     sub.add_parser("resume", help="解除暫停（使用者、維修或負責人）")
-    s = sub.add_parser("title", help="改房名（負責人或 使用者）"); s.add_argument("room_id"); s.add_argument("name")
+    s = sub.add_parser("title", help="改房名（負責人或使用者）"); s.add_argument("room_id"); s.add_argument("name")
     s = sub.add_parser("join"); s.add_argument("room_id"); s.add_argument("--kind", default=""); s.add_argument("--name", default="")
     sub.add_parser("leave")
-    s = sub.add_parser("move", help="使用者 把某個點移進房間（room 填 none 就是移出）"); s.add_argument("target"); s.add_argument("room_id")
+    s = sub.add_parser("move", help="使用者把某個點移進房間（room 填 none 就是移出）"); s.add_argument("target"); s.add_argument("room_id")
     sub.add_parser("moves")
     sub.add_parser("rooms")
     sub.add_parser("who")
@@ -431,9 +436,9 @@ def main(argv=None):
     s = t.add_parser("amend"); s.add_argument("task_id"); s.add_argument("to", choices=["achieved", "failed", "review"]); s.add_argument("--reason", required=True)
 
     a = p.parse_args(argv)
-    if a.user and a.session:
+    if a.as_user and a.session:
         sys.exit("--session 和 --user 只能選一個")
-    actor = "user" if a.user else a.session
+    actor = USER if a.as_user else a.session
     if a.cmd == "hook":
         return hook()
     if not actor and a.cmd not in ("overview",):
@@ -448,6 +453,8 @@ def main(argv=None):
     if a.cmd == "global":
         return show(call("POST", "/api/global", actor, session=agent_of(a.target),
                          kind="" if a.kind == "none" else a.kind, alias=a.alias))
+    if a.cmd == "delete":
+        return show(call("POST", f"/api/rooms/{a.room_id}/delete", actor))
     if a.cmd == "title":
         return show(call("POST", f"/api/rooms/{a.room_id}/name", actor, name=a.name))
     if a.cmd == "join":
@@ -475,7 +482,7 @@ def main(argv=None):
     if a.cmd == "dnd":
         return show(call("POST", "/api/dnd", actor, session=a.target or actor, on=a.state == "on"))
     if a.cmd == "listen":
-        if actor == "user":
+        if actor == USER:
             sys.exit("listen 是給 agent 用的")
         down = False
         while True:

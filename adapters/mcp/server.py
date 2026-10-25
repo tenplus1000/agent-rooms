@@ -7,6 +7,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from rooms import paths  # noqa: E402
+
+paths.load_local_env()   # Codex 直接啟動這支、不經過 bin/，要自己讀 local.env 才知道使用者是誰
+from rooms import identity  # noqa: E402
+
 VERSIONS = ('2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25')
 
 
@@ -15,7 +21,7 @@ def field(kind, description):
 
 
 SESSION = field('string', '呼叫者自己的 session id，對應 HTTP as。')
-ROOM = field('string', 'room_id；省略時查詢自己目前所在房間。使用者 必須指定。')
+ROOM = field('string', 'room_id；省略時查詢自己目前所在房間。使用者必須指定。')
 TEXT = field('string', '原文。')
 NOTE = field('string', '說明或驗證紀錄。')
 REASON = field('string', '原因。')
@@ -99,8 +105,8 @@ def current_room(session, given=None):
     if given:
         return given
     rooms = http('GET', '/api/rooms', **{'as': session})
-    if session == 'user':
-        raise ToolError('使用者 要指定房間：--room R1')
+    if session == identity.USER:
+        raise ToolError('使用者要指定房間：--room R1')
     if not rooms:
         raise ToolError('你現在不在任何房間。先 room join <房間>')
     return rooms[0]['room_id']

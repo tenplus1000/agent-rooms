@@ -70,6 +70,8 @@ ROOMS_URL = "http://127.0.0.1:8775"
 bin/rooms-dispatch
 ```
 
+要開機就自動跑、掛了自己重開，用 `contrib/rooms-dispatch.service`（systemd 使用者服務，安裝方法寫在檔案開頭）。
+
 Codex 的視窗要接在背景服務上，房間才送得進去：用 `codex` 或 `codex resume <id>` 開，不要帶 `-c`／`--enable`／`--disable`／`--search` 這類參數（帶了會改成獨立執行）。
 
 ### 4. 開房間
@@ -80,9 +82,10 @@ bin/room move <session id> R1 --user        # 把 agent 移進房間
 bin/room rename <session id> 工人1 --user
 bin/room role 工人1 "負責寫測試" --user --room R1   # 一句在做什麼，判官靠它判斷
 bin/room overview
+bin/room delete R3 --user                       # 刪房間：房裡要先沒人，紀錄封存在 data/rooms/deleted/
 ```
 
-負責人（或 使用者）還可以：
+負責人（或使用者）還可以：
 
 ```bash
 bin/room spawn 工人2 "請先讀白板再開始" --role "負責寫文件" --cwd ~/my-project   # 開一個新的 Codex 成員
@@ -90,8 +93,8 @@ bin/room on 工人1                     # 把下線的人叫回來
 ```
 
 - `spawn` 在背景服務開一個新的 Codex 對話（沒有視窗），帳號照 `ROOMS_SPAWN_ACCOUNTS` 的順序挑還有額度的，也可以用 `--account` 指定。它進房後收到第一則訊息就開始做；想看它在做什麼，用輸出的 `codex resume <id>` 接上。
-- 下線的人不會被叫醒。由負責人或 使用者 `on` 叫回來的，視窗關著也會在背景載入那個對話送進去；本人回到視窗打字只是回到線上。
-- 使用者 正在跟某個 Codex 講話時，房間等那一輪跑完再送，不插進去；它閒著就馬上送。
+- 下線的人不會被叫醒。由負責人或使用者 `on` 叫回來的，視窗關著也會在背景載入那個對話送進去；本人回到視窗打字只是回到線上。
+- 使用者正在跟某個 Codex 講話時，房間等那一輪跑完再送，不插進去；它閒著就馬上送。
 
 ### 全域角色
 
@@ -114,6 +117,8 @@ bin/room global <名字> none --user                       # 取消
 
 | 變數 | 用途 |
 |---|---|
+| `ROOMS_USER_ID` | 使用者在房裡的 id：房裡寫 `@<id>` 找使用者，命令列可用 `--<id>` 代替 `--user`；預設 `user`。設定後就不要再改，舊資料用的是當時的 id |
+| `ROOMS_USER_NAME` | 使用者顯示的名字，寫進給 agent 的規則和通知；預設跟 `ROOMS_USER_ID` 一樣 |
 | `ROOMS_URL` | 核心位址，預設 `http://127.0.0.1:8775` |
 | `ROOMS_DATA_DIR` | container 的資料資料夾，預設 `./data` |
 | `ROOMS_JUDGE` | `off` 關掉判官（沒 @ 的訊息改成叫醒負責人） |
@@ -125,7 +130,7 @@ bin/room global <名字> none --user                       # 取消
 | `ROOMS_SPAWN_ACCOUNTS` | `spawn` 挑帳號的順序（名字，冒號分隔），沒額度就換下一個；預設照 `ROOMS_CODEX_HOMES` |
 | `ROOMS_QUOTA_HELPER` | 選用：放 `codexquota.py` 的資料夾，用來在多個 Codex 帳號間挑還有額度的 |
 
-轉送程式會讀 repo 根目錄的 `local.env`（不進 git），本機設定可以寫在那裡。
+命令列、轉送程式、MCP 和核心的 container 都會讀 repo 根目錄的 `local.env`（不進 git），本機設定寫在那裡。
 
 ## 測試
 
