@@ -439,7 +439,11 @@ class Core:
         """
         with self.cond:
             self._require_see(actor, room_id)
-            if actor == USER or not text.strip() or not judge.enabled():
+            # 使用者講話照規則給負責人；只有負責人不在房裡（例如使用者自己開的房）才要問判官
+            if not text.strip() or not judge.enabled():
+                return None
+            if actor == USER and (self.state["rooms"][room_id]["owner"] in self._members(room_id)
+                                  or self._resolve_mentions(room_id, text)):
                 return None
             if any(n.lower() in EVERYONE for n in MENTION.findall(text)):
                 return None
@@ -479,7 +483,13 @@ class Core:
                 room["hops"] = 0
                 room["paused"] = False
                 if not mentions and not everyone and room["owner"] in members:
-                    wake.append(room["owner"])       #使用者沒點名就是對負責人說
+                    wake.append(room["owner"])       # 使用者沒點名就是對負責人說
+                elif not mentions and not everyone and not desk:
+                    # 負責人不在房裡（例如使用者自己開的房）：判官判過就照判官，叫不到就叫房裡還在線上的人
+                    if judged and judged.get("probs") is not None:
+                        wake = [m for m in members if judged["probs"].get(self.name_of(m), 0) >= judge.THRESHOLD]
+                    else:
+                        wake = [m for m in members if not self.state["agents"][m].get("off")]
             else:
                 named = [m for m in mentions if m in members]          # @ 到的房裡成員（不含使用者、維修）
                 if judged and judged.get("probs") is not None:

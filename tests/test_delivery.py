@@ -65,6 +65,17 @@ class WakeTest(unittest.TestCase):
         self.assertEqual(event["wake"], ["s-boss"])
         self.assertIn("error", event["judged"])
 
+    def test_user_in_a_room_without_its_owner_reaches_someone(self):
+        room = self.core.create_room(USER, "使用者的房")["room_id"]
+        for sid in ("s-a", "s-b"):
+            self.core.move(sid, sid, room)
+        self.core.set_off(USER, "s-b", True)
+        self.assertEqual(self.core.post(USER, room, "為什麼這邊沒有主持")["wake"], ["s-a"])    # 判官關著：叫還在的人
+        with mock.patch.dict(os.environ, {"ROOMS_JUDGE": "on", "ROOMS_JUDGE_KEY": "k"}), \
+                mock.patch("rooms.judge.addressees", return_value=({"a": 0.2, "b": 0.9}, None)):
+            judged = self.core.judge_wake(USER, room, "b 你那邊好了嗎")
+        self.assertEqual(self.core.post(USER, room, "b 你那邊好了嗎", judged=judged)["wake"], ["s-b"])
+
     def test_user_skips_the_judge(self):
         _, ask = self.judged_post(USER, "大家好", {})
         self.assertFalse(ask.called)
