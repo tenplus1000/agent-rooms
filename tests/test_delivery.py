@@ -283,6 +283,67 @@ class LiveServer(unittest.TestCase):
         return json.loads(text)["hookSpecificOutput"]["additionalContext"] if text else None
 
 
+class RemoteTest(unittest.TestCase):
+    """遠端入口：一律要鑰匙，身分由鑰匙決定。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.core = Core(self._tmp.name)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.core, remote=True))
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        for sid, name in (("s-boss", "主持"), ("s-res", "管家")):
+            self.core.register(sid, "claude", name)
+        self.room = self.core.create_room("s-boss", "房")["room_id"]
+        self.core.move("s-boss", "s-boss", self.room)
+        self.core.set_global(USER, "s-res", "resident", "總管")
+        self.res_key = self.core.issue_key(USER, "s-res")["key"]
+        self.user_key = self.core.issue_key(USER, USER)["key"]
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self._tmp.cleanup()
+
+    def http(self, method, path, key=None, **params):
+        import urllib.request, urllib.error
+        import urllib.parse
+        data = json.dumps(params).encode() if method == "POST" else None
+        url = self.base + path + ("?" + urllib.parse.urlencode(params) if method == "GET" and params else "")
+        req = urllib.request.Request(url, data=data, method=method,
+                                     headers={"Content-Type": "application/json",
+                                              **({"Authorization": f"Bearer {key}"} if key else {})})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def test_no_key_or_wrong_key_is_refused(self):
+        self.assertEqual(self.http("GET", "/api/overview")[0], 401)
+        self.assertEqual(self.http("GET", "/api/overview", key="wrong-key")[0], 401)
+        self.assertEqual(self.http("GET", "/api/overview", key=self.res_key)[0], 200)
+
+    def test_identity_comes_from_the_key_not_as(self):
+        status, got = self.http("POST", f"/api/rooms/{self.room}/post", key=self.res_key, text="大家好", **{"as": USER})
+        self.assertEqual(status, 200)
+        self.assertEqual(got["result"]["from"], "s-res")                 # 冒充使用者沒用
+        status, got = self.http("POST", f"/api/rooms/{self.room}/post", key=self.user_key, text="我來了")
+        self.assertEqual(got["result"]["from"], USER)
+
+    def test_resident_manages_but_cannot_delete_or_issue_keys(self):
+        self.assertEqual(self.http("POST", "/api/rooms", key=self.res_key, name="新房", owner="s-boss")[0], 200)
+        self.assertEqual(self.http("POST", f"/api/rooms/{self.room}/delete", key=self.res_key)[0], 403)
+        self.assertEqual(self.http("POST", "/api/keys", key=self.res_key, identity="s-res")[0], 403)
+        self.assertEqual(self.http("POST", "/api/keys", key=self.user_key, identity="s-res")[0], 403)   # 只在本機發
+        self.assertEqual(self.http("GET", "/api/listen", key=self.res_key, session="s-boss", wait=0)[0], 403)
+        self.assertEqual(self.http("GET", "/api/listen", key=self.res_key, session="s-res", wait=0)[0], 200)
+
+    def test_revoked_key_stops_working(self):
+        self.core.revoke_keys(USER, "s-res")
+        self.assertEqual(self.http("GET", "/api/overview", key=self.res_key)[0], 401)
+
+
 class HookTest(LiveServer):
     def test_user_prompt_gets_rules_and_backlog(self):
         self.core.post(USER, self.room, "背景")

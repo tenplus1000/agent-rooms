@@ -5,7 +5,8 @@ COPY rooms/ ./rooms/
 
 ENV ROOMS_HOST=0.0.0.0 \
     ROOMS_PORT=8775 \
+    ROOMS_REMOTE_PORT=8776 \
     ROOMS_DATA=/data
 
-EXPOSE 8775
+EXPOSE 8775 8776
 CMD ["python", "-m", "rooms.server"]

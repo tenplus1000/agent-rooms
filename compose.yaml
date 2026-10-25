@@ -16,7 +16,8 @@ services:
     volumes:
       - ${ROOMS_DATA_DIR:-./data}:/data
     ports:
-      - "127.0.0.1:8775:8775"
+      - "127.0.0.1:8775:8775"   # 本機入口：不驗證
+      - "127.0.0.1:8776:8776"   # 遠端入口：一律要鑰匙（給 tailscale serve 之類轉進來的請求）
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8775/api/overview', timeout=3).read()"]

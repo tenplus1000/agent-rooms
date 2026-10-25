@@ -12,6 +12,7 @@
 """
 
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -219,10 +220,10 @@ class Core:
             return dict(self.state["rooms"][room_id])
 
     def delete_room(self, actor, room_id):
-        """刪房間（使用者或全域角色）。房裡要先沒人；紀錄搬到 rooms/deleted/ 封存，不真的刪。"""
+        """刪房間（使用者或維修；常駐代理不能刪）。房裡要先沒人；紀錄搬到 rooms/deleted/ 封存，不真的刪。"""
         with self.cond:
-            if not self._admin(actor):
-                raise RoomError("只有使用者或全域角色能刪房間", 403)
+            if actor != USER and self._globals().get(actor, {}).get("kind") != "maintainer":
+                raise RoomError("只有使用者或維修能刪房間", 403)
             room = self._room(room_id)
             if self._members(room_id):
                 raise RoomError(f"{room['name']} 裡還有人：先把成員移出去（move <名字> none）再刪")
@@ -497,6 +498,40 @@ class Core:
             found[session] = {"kind": kind, "alias": alias}
             self._commit()
             return {"session": session, "name": agent["name"], **found[session]}
+
+    # ── 遠端鑰匙：從網路連進來的請求靠它決定身分（本機的入口不用）──────────
+
+    def issue_key(self, actor, identity, label=""):
+        """發一把鑰匙給某個身分（使用者，或已登記的 agent／全域角色）。只存雜湊；原文只在這次回傳。"""
+        import secrets
+        if actor != USER:
+            raise RoomError("只有使用者能發鑰匙", 403)
+        with self.cond:
+            if identity != USER:
+                self._agent(identity)
+            token = secrets.token_urlsafe(32)
+            self.state.setdefault("keys", {})[hashlib.sha256(token.encode()).hexdigest()] = {
+                "identity": identity, "label": label, "created": _now()}
+            self._commit()
+            return {"identity": identity, "name": self.name_of(identity), "key": token}
+
+    def revoke_keys(self, actor, identity):
+        if actor != USER:
+            raise RoomError("只有使用者能收回鑰匙", 403)
+        with self.cond:
+            keys = self.state.setdefault("keys", {})
+            gone = [h for h, k in keys.items() if k["identity"] == identity]
+            for h in gone:
+                del keys[h]
+            self._commit()
+            return {"identity": identity, "revoked": len(gone)}
+
+    def identity_for_key(self, token):
+        """鑰匙 → 身分；對不上回 None。"""
+        if not token:
+            return None
+        row = self.state.get("keys", {}).get(hashlib.sha256(token.encode()).hexdigest())
+        return row["identity"] if row else None
 
     def resume(self, actor, room_id):
         """解除暫停（使用者、維修或負責人）：互相 @ 的計數歸零。"""

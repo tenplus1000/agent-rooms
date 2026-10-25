@@ -392,6 +392,9 @@ def main(argv=None):
     s = sub.add_parser("global", help="使用者指定全域角色：maintainer（改房間工具）、resident（常駐代理，不改程式）")
     s.add_argument("target"); s.add_argument("kind", choices=["maintainer", "resident", "none"])
     s.add_argument("--alias", default="", help="房裡 @ 它的另一個叫法，例如「維修」")
+    s = sub.add_parser("key", help="使用者發遠端鑰匙給某個身分（user 或名字／session），原文只寫進檔案")
+    s.add_argument("target"); s.add_argument("--out", help="鑰匙寫到哪個檔（權限 600）；預設 ~/.config/agent-rooms/keys/<名字>.key")
+    s.add_argument("--revoke", action="store_true", help="收回這個身分的所有鑰匙")
     s = sub.add_parser("delete", help="刪房間（使用者或全域角色；房裡要先沒人，紀錄會封存）"); s.add_argument("room_id")
     sub.add_parser("resume", help="解除暫停（使用者、維修或負責人）")
     s = sub.add_parser("title", help="改房名（負責人或使用者）"); s.add_argument("room_id"); s.add_argument("name")
@@ -453,6 +456,18 @@ def main(argv=None):
     if a.cmd == "global":
         return show(call("POST", "/api/global", actor, session=agent_of(a.target),
                          kind="" if a.kind == "none" else a.kind, alias=a.alias))
+    if a.cmd == "key":
+        identity = USER if a.target in ("user", USER) else agent_of(a.target)
+        if a.revoke:
+            return show(call("POST", "/api/keys", actor, identity=identity, revoke="1"))
+        got = call("POST", "/api/keys", actor, identity=identity, label=a.out or "")
+        path = os.path.expanduser(a.out or f"~/.config/agent-rooms/keys/{a.target}.key")
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(got["key"] + "\n")
+        os.chmod(path, 0o600)
+        return show({"identity": got["identity"], "name": got["name"], "written": path})
     if a.cmd == "delete":
         return show(call("POST", f"/api/rooms/{a.room_id}/delete", actor))
     if a.cmd == "title":

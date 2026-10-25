@@ -1,7 +1,11 @@
 """房間核心的 HTTP JSON API，只用標準函式庫。
 
-身分放在 `as`（query 或 JSON body）：agent 填自己的 session id，使用者填 identity.USER（由設定決定）。
-目前只綁 127.0.0.1／container 內網，沒有登入；開給手機之前要先加 token。
+兩個入口：
+  本機（ROOMS_PORT，預設 8775）：身分放在 `as`（query 或 JSON body），agent 填自己的 session id、使用者填
+    identity.USER。不驗證，只給同一台電腦上的程式用。
+  遠端（ROOMS_REMOTE_PORT，預設 8776）：一律要 `Authorization: Bearer <鑰匙>`，身分由鑰匙決定，`as` 不算數。
+    給從網路轉進來的請求用（例如 tailscale serve）；轉進來的請求看起來也是 127.0.0.1，所以用另一個埠分開，
+    不靠來源位址判斷。鑰匙用 `room key` 在本機發。
 """
 
 import json
@@ -11,7 +15,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from rooms.core import Core, RoomError
+from rooms.core import USER, Core, RoomError
+
+# 遠端的人代表自己時才能用的入口：session 參數必須是它自己（使用者例外）
+SELF_ONLY = ("/api/listen", "/api/ack", "/api/touch", "/api/register", "/api/user_here", "/api/delivery")
+LOCAL_ONLY = ("/api/keys", "/api/global")         # 發鑰匙、指定全域角色只在本機做
 
 INDEX_HTML = Path(__file__).parent / "web" / "index.html"
 
@@ -26,7 +34,7 @@ TASK_ACTIONS = {
 }
 
 
-def make_handler(core):
+def make_handler(core, remote=False):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # 安靜；錯誤照樣回給呼叫端
             pass
@@ -52,6 +60,8 @@ def make_handler(core):
                 body = self._body() if method in ("POST", "PUT") else {}
                 args = {**query, **body}
                 actor = args.get("as", "")
+                if remote and url.path.startswith("/api/"):
+                    actor = self._remote_actor(url.path, args)
                 result = self._route(method, url.path, args, actor)
                 if isinstance(result, tuple):
                     self._send(200, result[0], result[1])
@@ -61,6 +71,19 @@ def make_handler(core):
                 self._send(error.status, {"ok": False, "error": str(error)})
             except (ValueError, KeyError) as error:
                 self._send(400, {"ok": False, "error": f"參數不對：{error}"})
+
+        def _remote_actor(self, path, args):
+            header = self.headers.get("Authorization", "")
+            token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+            actor = core.identity_for_key(token)
+            if not actor:
+                raise RoomError("要鑰匙：Authorization: Bearer <鑰匙>", 401)
+            if path.startswith(LOCAL_ONLY):
+                raise RoomError("這個只能在本機做", 403)
+            if path.startswith(SELF_ONLY) and actor != USER and args.get("session", actor) != actor:
+                raise RoomError("只能用你自己的身分", 403)
+            args["as"] = actor
+            return actor
 
         def _route(self, method, path, a, actor):
             if method == "GET" and path in ("/", "/index.html"):
@@ -81,6 +104,10 @@ def make_handler(core):
                 return core.set_role(actor, a["session"], a.get("role", ""))
             if method == "POST" and path == "/api/off":
                 return core.set_off(actor, a["session"], a.get("on") in (True, "1", "true", 1), a.get("reason", ""))
+            if method == "POST" and path == "/api/keys":
+                if a.get("revoke") in (True, "1", "true", 1):
+                    return core.revoke_keys(actor, a["identity"])
+                return core.issue_key(actor, a["identity"], a.get("label", ""))
             if method == "POST" and path == "/api/global":
                 return core.set_global(actor, a["session"], a.get("kind", ""), a.get("alias", ""))
             if method == "POST" and path == "/api/user_here":
@@ -152,8 +179,14 @@ def make_handler(core):
     return Handler
 
 
-def serve(data_dir, host="127.0.0.1", port=8775):
+def serve(data_dir, host="127.0.0.1", port=8775, remote_port=0):
     core = Core(data_dir)
+    if remote_port:
+        import threading
+        remote = ThreadingHTTPServer((host, remote_port), make_handler(core, remote=True))
+        remote.daemon_threads = True
+        threading.Thread(target=remote.serve_forever, daemon=True).start()
+        print(f"agent-rooms remote entry (key required) on http://{host}:{remote_port}", flush=True)
     server = ThreadingHTTPServer((host, port), make_handler(core))
     server.daemon_threads = True
     print(f"agent-rooms core on http://{host}:{port}  data={data_dir}", flush=True)
@@ -162,4 +195,5 @@ def serve(data_dir, host="127.0.0.1", port=8775):
 
 if __name__ == "__main__":
     serve(os.environ.get("ROOMS_DATA", str(Path(__file__).resolve().parent.parent / "data")),
-          os.environ.get("ROOMS_HOST", "127.0.0.1"), int(os.environ.get("ROOMS_PORT", "8775")))
+          os.environ.get("ROOMS_HOST", "127.0.0.1"), int(os.environ.get("ROOMS_PORT", "8775")),
+          int(os.environ.get("ROOMS_REMOTE_PORT", "0") or 0))
