@@ -22,7 +22,13 @@ from pathlib import Path
 from rooms import judge
 
 USER = "user"
-MAINTAINER = "維修"          # 誰當維修，房裡寫「@維修」都找得到它
+# 全域角色：不待在房裡、每間房都看得到、管得動人和房間（不能用使用者的身分發言）。
+#   maintainer：改房間工具本身；被 @、房間暫停、訊息送不到時叫醒它
+#   resident  ：常駐型代理（掌握全局、派房，不改程式）；被 @、有人 @ 使用者、房間暫停時叫醒它
+GLOBAL_KINDS = {
+    "maintainer": ("mention", "paused", "delivery"),
+    "resident": ("mention", "user", "paused"),
+}
 ONLINE_SECONDS = 75          # 監聽一輪最長 50 秒，再寬一點才算離線
 MAX_HOPS = 60
 JUDGE_CONTEXT = 4             # 判官看這則之前最近幾則發言（看得出誰派的工作）
@@ -115,12 +121,21 @@ class Core:
     def _members(self, room_id):
         return [sid for sid, a in self.state["agents"].items() if a.get("room_id") == room_id]
 
-    def maintainer(self):
-        return self.state.get("maintainer")
+    def _globals(self):
+        """{session: {"kind", "alias"}}。舊資料只有單一個 maintainer，讀的時候換成新格式。"""
+        found = self.state.setdefault("globals", {})
+        old = self.state.pop("maintainer", None)
+        if old and old not in found:
+            found[old] = {"kind": "maintainer", "alias": "維修"}
+        return found
+
+    def _woken_on(self, why):
+        """這種事要叫醒哪些全域角色（why：paused、delivery、user）。"""
+        return [sid for sid, g in self._globals().items() if why in GLOBAL_KINDS.get(g["kind"], ())]
 
     def _admin(self, actor):
-        """使用者 或維修：管得動任何人、任何房間。維修不能用 使用者 的身分發言，它發言就是它自己。"""
-        return actor == USER or (bool(actor) and actor == self.state.get("maintainer"))
+        """使用者 或全域角色：管得動任何人、任何房間。全域角色發言就是它自己，不能用 使用者 的身分。"""
+        return actor == USER or (bool(actor) and actor in self._globals())
 
     def _can_see(self, actor, room_id):
         """知識邊界：使用者 和維修看得到每一間；agent 只看得到自己此刻所在的那一間。"""
@@ -318,10 +333,11 @@ class Core:
     def _resolve_mentions(self, room_id, text):
         """@名字 → session（或 user）。只認此刻在房裡的人和 使用者。"""
         by_name = {self.state["agents"][sid]["name"]: sid for sid in self._members(room_id)}
-        keeper = self.state.get("maintainer")
-        if keeper in self.state["agents"]:
-            by_name.setdefault(self.state["agents"][keeper]["name"], keeper)
-            by_name.setdefault(MAINTAINER, keeper)      # 誰當維修都叫得到「@維修」
+        for sid, g in self._globals().items():        # 全域角色不在房裡，用名字或叫法都找得到
+            if sid in self.state["agents"]:
+                by_name.setdefault(self.state["agents"][sid]["name"], sid)
+                if g.get("alias"):
+                    by_name.setdefault(g["alias"], sid)
         found = []
         for name in MENTION.findall(text):
             if name.lower() == USER:
@@ -390,9 +406,9 @@ class Core:
             members = [m for m in self._members(room_id) if m != actor]
             everyone = any(n.lower() in EVERYONE for n in MENTION.findall(text))
             wake = [m for m in members if everyone or m in mentions]
-            keeper = self.state.get("maintainer")
-            if keeper in mentions and keeper not in members and keeper != actor:
-                wake.append(keeper)                   # 維修不在房裡，@ 它照樣叫醒
+            for sid in self._globals():
+                if sid in mentions and sid not in members and sid != actor:
+                    wake.append(sid)                  # 全域角色不在房裡，@ 它照樣叫醒
             if actor == USER:
                 room["hops"] = 0
                 room["paused"] = False
@@ -408,6 +424,8 @@ class Core:
                     wake.append(room["owner"])       # 判官叫不到：退回對負責人說，不然負責人看不到
                 if USER in mentions and not named and room["owner"] in members and room["owner"] not in wake:
                     wake.append(room["owner"])       # 只 @user：使用者 不在房裡，要靠負責人轉給他
+            if USER in mentions:                     # 等使用者的事：常駐型代理要知道
+                wake += [sid for sid in self._woken_on("user") if sid != actor and sid not in wake]
             just_paused = False
             if actor != USER and wake:
                 room["hops"] = room.get("hops", 0) + 1
@@ -421,10 +439,10 @@ class Core:
             event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake, held=held, **extra)
             for target in mentions:
                 self._open_thread(room_id, target, actor, text, "mention", ref=event["seq"])
-            if just_paused and (room["owner"] in members or self.state.get("maintainer")):
+            if just_paused and (room["owner"] in members or self._woken_on("paused")):
                 # 負責人要知道房間停了（發話的人收到的 notice 不會轉告別人），由他告訴 使用者；只叫這一次
                 self._emit(room_id, "paused", actor, text=PAUSED_TEXT,
-                           wake=[w for w in (room["owner"], self.state.get("maintainer")) if w])
+                           wake=[w for w in [room["owner"]] + self._woken_on("paused") if w])
             self._commit()
             if held:
                 # 發話的人要知道：訊息記下了，但沒有人被叫醒
@@ -435,18 +453,30 @@ class Core:
                                           "訊息留著，回到線上時會補給他。")
             return event
 
-    def set_maintainer(self, actor, session):
-        """使用者 指定哪個對話是維修（專門改房間工具的角色）。換人時舊的就不再是。"""
+    def set_global(self, actor, session, kind, alias=""):
+        """使用者 指定全域角色（kind 見 GLOBAL_KINDS；kind 空字串＝取消）。alias 是房裡 @ 它的另一個叫法。"""
         if actor != USER:
-            raise RoomError("只有 使用者 能指定維修", 403)
+            raise RoomError("只有 使用者 能指定全域角色", 403)
+        if kind and kind not in GLOBAL_KINDS:
+            raise RoomError(f"沒有這種全域角色：{kind}（有：{'、'.join(GLOBAL_KINDS)}）")
         with self.cond:
             agent = self._agent(session)
-            self.state["maintainer"] = session
-            # 從現在起才算：以前各房的事件不補給新的維修
-            for room_id, rows in self.events.items():
-                agent["cursor"][room_id] = max(agent["cursor"].get(room_id, 0), len(rows))
+            found = self._globals()
+            if not kind:
+                found.pop(session, None)
+                self._commit()
+                return {"session": session, "removed": True}
+            alias = alias.strip()
+            for sid, g in found.items():
+                if sid != session and alias and alias == g.get("alias"):
+                    raise RoomError(f"叫法「{alias}」已經給了別人")
+            if session not in found:
+                # 從現在起才算：以前各房的事件不補給新的全域角色
+                for room_id, rows in self.events.items():
+                    agent["cursor"][room_id] = max(agent["cursor"].get(room_id, 0), len(rows))
+            found[session] = {"kind": kind, "alias": alias}
             self._commit()
-            return {"maintainer": session, "name": agent["name"]}
+            return {"session": session, "name": agent["name"], **found[session]}
 
     def resume(self, actor, room_id):
         """解除暫停（使用者、維修或負責人）：互相 @ 的計數歸零。"""
@@ -569,8 +599,8 @@ class Core:
         if room_id:
             cursor = agent["cursor"].get(room_id, 0)
             rows = [e for e in self.events.get(room_id, []) if e["seq"] > cursor and e["from"] != session]
-        if session == self.state.get("maintainer"):
-            # 維修不用待在房裡：別的房間裡找它的事件（@維修、暫停、送不到）也算它的
+        if session in self._globals():
+            # 全域角色不用待在房裡：別的房間裡找它的事件（被 @、暫停、送不到……）也算它的
             for other, events in self.events.items():
                 if other == room_id:
                     continue
@@ -654,9 +684,9 @@ class Core:
             if notify and agent.get("room_id"):
                 members = self._members(agent["room_id"])
                 wake = [m for m in notify if m in members and m != session]
-                keeper = self.state.get("maintainer")
-                if keeper and keeper != session and keeper not in wake:
-                    wake.append(keeper)                # 多半是房間工具本身的問題，維修直接修
+                for sid in self._woken_on("delivery"):  # 多半是房間工具本身的問題，維修直接修
+                    if sid != session and sid not in wake:
+                        wake.append(sid)
                 self._emit(agent["room_id"], "delivery", session, action=action, detail=detail, wake=wake)
             self._commit()
             return row
@@ -862,5 +892,5 @@ class Core:
                                    "text": (e.get("text") or e.get("detail") or "")[:120]} for e in posts[-3:]]
                 view["last_at"] = (self.events.get(rid) or [{}])[-1].get("at")
                 rooms.append(view)
-            return {"rooms": rooms, "agents": agents, "maintainer": self.state.get("maintainer")}
+            return {"rooms": rooms, "agents": agents, "globals": dict(self._globals())}
 

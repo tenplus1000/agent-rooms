@@ -228,10 +228,11 @@ def user_active(session, last_sent):
 
 def render(room, session, events):
     """送進 Codex 的內容：房間規則（它沒有房間 hook）＋這一批訊息。"""
-    from rooms.cli import CODEX_RULES as RULES, line_for
+    from rooms.cli import CODEX_RULES as RULES, line_for, maintainer_line
     me = next((m for m in room["members"] if m["session"] == session), {"name": session[:8]})
     rules = RULES.format(room=room["name"], room_id=room["room_id"], name=me["name"], owner=room["owner_name"],
-                         session=session, room_cmd=os.path.join(ROOT, "bin", "room"))
+                         session=session, room_cmd=os.path.join(ROOT, "bin", "room"),
+                         maintainer_line=maintainer_line(call("GET", "/api/overview")))
     lines = [line_for(e, room["name"]) for e in events]
     return rules + "\n\n房間的新訊息：\n" + "\n".join(lines)
 

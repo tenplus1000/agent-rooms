@@ -140,21 +140,26 @@ RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{roo
 - 收到成員或別的對話的回報（交件、做完、卡住），回 使用者 的第一句就講誰回報了什麼，不要混在別的狀態裡。
 - 轉達給不在房裡的對話（例如用 SendMessage）時，附上 使用者 原話的時間和你的 session id，對方才查得到那是 使用者 交代的。
 - 等成員回報時，不要用 sleep、until 這類會卡住的指令等，也不用開 Monitor：指令跑著的時候房間訊息進不來；有人交件、回報或找你，房間會在你這一輪結束後叫醒你。
-- 房間工具本身壞了或要改（叫不醒、送不到、要新功能），寫「@維修」找維修，不要自己改房間工具的程式。
-- 只處理這間房的事；別的房間你看不到，也不要去找。"""
+{maintainer_line}- 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
-MAINTAINER_RULES = """你是 使用者 房間工具的維修（在房裡叫「{name}」，別人寫「@維修」也找得到你）：專門改房間工具本身（{repo}）。你不用待在任何房間，每間房都看得到。
+MAINTAINER_RULES = """你是 使用者 房間工具的維修（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：專門改房間工具本身（{repo}）。你不用待在任何房間，每間房都看得到。
 - 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
 - 管理：`move <名字> <房號|none>`、`rename <名字> <新名字>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`title <房號> <新房名>`、`resume`（解除暫停）、`create <房名> --owner <名字>`（開普通房、指定主持，你不進去）；要開維修房就 `create <房名>` 再 `join`，你自己當主持。你不能用 使用者 的身分發言，回話都是你自己。
 - 有人 @維修、房間暫停、訊息送不到，都會叫醒你：先看那間房的紀錄判斷是房間工具的問題還是那間房自己的事；是工具的問題就修，修完 commit、重建核心（`docker compose up -d --build`）、需要時重啟轉送程式，實測過再回那間房說一聲。
 - 改動照 repo 的慣例：設計理由寫 docs/，commit 訊息不寫私人專案名；commit 後會自動推工作 repo 並同步公開版。
 - 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
 
+RESIDENT_RULES = """你是 使用者 的常駐代理，在房間工具裡是全域角色（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：掌握全局——使用者 現在在忙什麼、每間房在做什麼、誰卡住或在等 使用者。你不用待在任何房間，每間房都看得到。
+- 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
+- 派房：`create <房名> --owner <名字>`（開房、指定主持，你不進去）、`move <名字> <房號|none>`、`spawn <名字> "<派工>" --role "<在做什麼>" --room <房號>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`resume`。你不能用 使用者 的身分發言，回話都是你自己。
+- 你不改任何程式、不修房間工具；房間工具的問題寫「@{maintainer}」找維修，專案的實作交給該房的主持或成員。
+- 有人 @你、有人 @user（在等 使用者）、房間暫停，都會叫醒你；其他事你每一輪會在總覽裡看到。
+- 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
+
 CODEX_RULES = """你現在在 使用者 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，負責人是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 使用者 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
 - 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@user 找 使用者）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。
-- 房間工具本身壞了或要改（叫不醒、送不到、要新功能），寫「@維修」找維修，不要自己改房間工具的程式。
-- 只處理這間房的事；別的房間你看不到，也不要去找。"""
+{maintainer_line}- 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
 
 
@@ -170,8 +175,8 @@ def hook():
             return rewake(session)
         full = event_name == "UserPromptSubmit"
         overview = _quick("GET", "/api/overview", {})
-        if overview and overview.get("maintainer") == session:
-            return maintainer_hook(session, event_name, full, overview)
+        if overview and session in (overview.get("globals") or {}):
+            return global_hook(session, event_name, full, overview)
         rooms = _quick("GET", "/api/rooms", {"as": session})
         if not rooms:
             return
@@ -194,7 +199,7 @@ def hook():
             # Windows 那邊的 Claude（桌面版）：hook 經 wsl.exe 轉進來，它自己的 shell 要用 wsl.exe 叫房間
             room_cmd = f"MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- {room_cmd}"
         info = dict(room=room["name"], room_id=room["room_id"], name=me["name"], owner=room["owner_name"],
-                    session=session, room_cmd=room_cmd)
+                    session=session, room_cmd=room_cmd, maintainer_line=maintainer_line(overview))
         parts = []
         if full:
             parts.append((CODEX_RULES if me["kind"] == "codex" else RULES).format(**info))
@@ -208,8 +213,23 @@ def hook():
         return
 
 
-def maintainer_hook(session, event_name, full, overview):
-    """維修：不用待在房裡。開口那一輪給規則＋每間房的總覽＋找它的訊息；做事中途只在有人找它時插話。"""
+def maintainer_line(overview):
+    """一般規則裡「工具壞了找誰」那一句；沒有維修就不寫。"""
+    for sid, g in ((overview or {}).get("globals") or {}).items():
+        if g["kind"] == "maintainer":
+            return f"- 房間工具本身壞了或要改（叫不醒、送不到、要新功能），寫「@{call_of(sid, g, overview)}」找維修，不要自己改房間工具的程式。\n"
+    return ""
+
+
+def call_of(session, g, overview):
+    """房裡 @ 這個全域角色的寫法：有叫法用叫法，沒有就用它的名字。"""
+    if g.get("alias"):
+        return g["alias"]
+    return next((a["name"] for a in overview["agents"] if a["session"] == session), session[:8])
+
+
+def global_hook(session, event_name, full, overview):
+    """全域角色：不用待在房裡。開口那一輪給規則＋每間房的總覽＋找它的訊息；做事中途只在有人找它時插話。"""
     got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "1",
                                         "triggers_only": "0" if full else "1"})
     names = {r["room_id"]: r["name"] for r in overview["rooms"]}
@@ -220,8 +240,12 @@ def maintainer_hook(session, event_name, full, overview):
     if full:
         repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         me = next((a for a in overview["agents"] if a["session"] == session), {"name": session[:8]})
-        parts.append(MAINTAINER_RULES.format(name=me["name"], session=session,
-                                             room_cmd=os.path.join(repo, "bin", "room"), repo=repo))
+        g = overview["globals"][session]
+        rules = MAINTAINER_RULES if g["kind"] == "maintainer" else RESIDENT_RULES
+        keeper = next((call_of(s, k, overview) for s, k in overview["globals"].items() if k["kind"] == "maintainer"),
+                      "維修")
+        parts.append(rules.format(name=me["name"], call=call_of(session, g, overview), session=session,
+                                  room_cmd=os.path.join(repo, "bin", "room"), repo=repo, maintainer=keeper))
         parts.append(summary_of(overview))
     if lines:
         parts.append("找你的訊息：\n" + "\n".join(lines))
@@ -326,8 +350,8 @@ def spawn(actor, room_id, name, role, text, cwd, account=None):
     第一則由轉送程式送進去（帶房間規則），跟其他成員收訊息走同一條路。
     """
     room = call("GET", f"/api/rooms/{room_id}", actor)
-    if actor != "user" and room["owner"] != actor:
-        sys.exit("只有 使用者 或房間負責人能開新成員")
+    if actor != "user" and room["owner"] != actor and actor not in call("GET", "/api/overview")["globals"]:
+        sys.exit("只有 使用者、全域角色或房間負責人能開新成員")
     if not os.path.isdir(cwd):
         sys.exit(f"沒有這個資料夾：{cwd}")
     from rooms import dispatch
@@ -361,7 +385,9 @@ def main(argv=None):
     s = sub.add_parser("rename"); s.add_argument("target"); s.add_argument("name")
     s = sub.add_parser("create"); s.add_argument("name")
     s.add_argument("--owner", default=None, help="使用者／維修：指定負責人（名字或 session），自己不進去")
-    s = sub.add_parser("maintainer", help="使用者 指定維修（專門改房間工具的對話）"); s.add_argument("target")
+    s = sub.add_parser("global", help="使用者 指定全域角色：maintainer（改房間工具）、resident（常駐代理，不改程式）")
+    s.add_argument("target"); s.add_argument("kind", choices=["maintainer", "resident", "none"])
+    s.add_argument("--alias", default="", help="房裡 @ 它的另一個叫法，例如「維修」")
     sub.add_parser("resume", help="解除暫停（使用者、維修或負責人）")
     s = sub.add_parser("title", help="改房名（負責人或 使用者）"); s.add_argument("room_id"); s.add_argument("name")
     s = sub.add_parser("join"); s.add_argument("room_id"); s.add_argument("--kind", default=""); s.add_argument("--name", default="")
@@ -419,8 +445,9 @@ def main(argv=None):
         return show(call("POST", "/api/rename", actor, session=agent_of(a.target), name=a.name))
     if a.cmd == "create":
         return show(call("POST", "/api/rooms", actor, name=a.name, owner=agent_of(a.owner) if a.owner else None))
-    if a.cmd == "maintainer":
-        return show(call("POST", "/api/maintainer", actor, session=agent_of(a.target)))
+    if a.cmd == "global":
+        return show(call("POST", "/api/global", actor, session=agent_of(a.target),
+                         kind="" if a.kind == "none" else a.kind, alias=a.alias))
     if a.cmd == "title":
         return show(call("POST", f"/api/rooms/{a.room_id}/name", actor, name=a.name))
     if a.cmd == "join":

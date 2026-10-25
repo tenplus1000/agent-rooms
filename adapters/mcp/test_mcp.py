@@ -112,7 +112,7 @@ def main():
             assert core.poll() is None, (base / 'core.log').read_text()
             try:
                 with urllib.request.urlopen(base_url + '/api/overview', timeout=1) as response:
-                    assert json.load(response)['result'] == {'rooms': [], 'agents': [], 'maintainer': None}
+                    assert json.load(response)['result'] == {'rooms': [], 'agents': [], 'globals': {}}
                 break
             except (urllib.error.URLError, TimeoutError):
                 if time.monotonic() >= deadline:

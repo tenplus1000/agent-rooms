@@ -167,13 +167,13 @@ class WakeTest(unittest.TestCase):
 
     def keeper(self):
         self.core.register("s-m", "claude", "修房")
-        self.core.set_maintainer(USER, "s-m")
+        self.core.set_global(USER, "s-m", "maintainer", "維修")
         return "s-m"
 
     def test_only_user_names_the_maintainer(self):
         self.core.register("s-m", "claude", "修房")
         with self.assertRaises(Exception):
-            self.core.set_maintainer("s-boss", "s-m")
+            self.core.set_global("s-boss", "s-m", "maintainer")
 
     def test_mention_wakes_the_maintainer_outside_the_room(self):
         self.keeper()
@@ -204,9 +204,34 @@ class WakeTest(unittest.TestCase):
         event = self.core.post(m, self.room, "修好了")
         self.assertEqual(event["from"], m)                                 # 發言是它自己，不是 使用者
         with self.assertRaises(Exception):
-            self.core.set_maintainer(m, "s-a")                             # 不能自己換維修
+            self.core.set_global(m, "s-a", "resident")                     # 不能自己指定全域角色
         with self.assertRaises(Exception):
             self.core.create_room("s-b", "別人的房", owner="s-a")            # 一般成員不能替人指定主持
+
+    def test_resident_hears_calls_for_the_user_not_tool_failures(self):
+        self.keeper()
+        self.core.register("s-r", "claude", "管家")
+        self.core.set_global(USER, "s-r", "resident", "總管")
+        self.assertIn("s-r", self.core.post("s-a", self.room, "@總管 今天先做哪個")["wake"])
+        self.assertIn("s-r", self.core.post("s-a", self.room, "@user 這要你決定")["wake"])     # 在等使用者
+        self.core.record_delivery("s-a", "uncertain", "送出後結果不確定", light=True, notify=["s-boss"])
+        self.pause()
+        got = [e["type"] for e in self.core.listen("s-r", wait=0, triggers_only=True)["events"]]
+        self.assertEqual(got, ["post", "post", "paused"])                       # 送不到是維修的事
+        kinds = [e["type"] for e in self.core.listen("s-m", wait=0, triggers_only=True)["events"]]
+        self.assertIn("delivery", kinds)
+        self.assertNotIn("@user 這要你決定", [e.get("text") for e in
+                                             self.core.listen("s-m", wait=0)["events"]])   # 維修不收等使用者的事
+
+    def test_global_roles_are_set_by_the_user_only_and_can_be_removed(self):
+        self.keeper()
+        self.core.register("s-r", "claude", "管家")
+        with self.assertRaises(Exception):
+            self.core.set_global(USER, "s-r", "resident", "維修")              # 叫法不能重複
+        with self.assertRaises(Exception):
+            self.core.set_global(USER, "s-r", "boss")                           # 只有兩種
+        self.core.set_global(USER, "s-m", "")
+        self.assertNotIn("s-m", self.core.post("s-a", self.room, "@維修 在嗎")["wake"])  # 取消後叫不到
 
     def test_resume_clears_the_pause(self):
         self.pause()
@@ -311,7 +336,7 @@ class HookTest(LiveServer):
 
     def test_maintainer_gets_rules_summary_and_calls(self):
         self.core.register("s-m", "claude", "修房")
-        self.core.set_maintainer(USER, "s-m")
+        self.core.set_global(USER, "s-m", "maintainer", "維修")
         self.core.post("s-cx", self.room, "@維修 送不到")
         context = self.run_hook("s-m", "UserPromptSubmit")
         self.assertIn("你是 使用者 房間工具的維修", context)
@@ -321,6 +346,22 @@ class HookTest(LiveServer):
         self.assertIsNone(self.run_hook("s-m", "PostToolUse"))           # 沒人再找它就不插話
         self.core.post("s-cx", self.room, "@維修 還是不行")
         self.assertIn("還是不行", self.run_hook("s-m", "PostToolUse"))
+
+    def test_member_rules_name_the_maintainer_only_when_there_is_one(self):
+        self.assertNotIn("找維修", self.run_hook("s-claude", "UserPromptSubmit"))
+        self.core.register("s-m", "claude", "修房")
+        self.core.set_global(USER, "s-m", "maintainer", "工具人")
+        self.assertIn("寫「@工具人」找維修", self.run_hook("s-claude", "UserPromptSubmit"))
+
+    def test_resident_gets_its_own_rules(self):
+        self.core.register("s-m", "claude", "修房")
+        self.core.set_global(USER, "s-m", "maintainer", "工具人")
+        self.core.register("s-r", "claude", "管家")
+        self.core.set_global(USER, "s-r", "resident")
+        context = self.run_hook("s-r", "UserPromptSubmit")
+        self.assertIn("你是 使用者 的常駐代理", context)
+        self.assertIn("「@工具人」找維修", context)
+        self.assertIn("各房間現況", context)
 
     def test_post_tool_use_only_interrupts_for_triggers(self):
         self.core.post(USER, self.room, "@工人 只是背景")                 # 找的是別人，對主持是背景

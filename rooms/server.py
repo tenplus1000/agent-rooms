@@ -81,8 +81,8 @@ def make_handler(core):
                 return core.set_role(actor, a["session"], a.get("role", ""))
             if method == "POST" and path == "/api/off":
                 return core.set_off(actor, a["session"], a.get("on") in (True, "1", "true", 1), a.get("reason", ""))
-            if method == "POST" and path == "/api/maintainer":
-                return core.set_maintainer(actor, a["session"])
+            if method == "POST" and path == "/api/global":
+                return core.set_global(actor, a["session"], a.get("kind", ""), a.get("alias", ""))
             if method == "POST" and path == "/api/user_here":
                 return core.user_here(a["session"])
             if method == "POST" and path == "/api/dnd":
