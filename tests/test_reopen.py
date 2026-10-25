@@ -33,6 +33,18 @@ class ReopenTest(unittest.TestCase):
         (self.home / "sessions" / "1.json").write_text(json.dumps(row))
         self.assertFalse(dispatch.claude_alive("s-1"))
 
+    def test_only_fresh_calls_open_a_window(self):
+        import datetime
+        now = datetime.datetime(2026, 10, 26, tzinfo=datetime.timezone.utc).timestamp()
+        at = lambda ago: datetime.datetime.fromtimestamp(now - ago, datetime.timezone.utc).isoformat()
+        events = [{"seq": 1, "type": "join", "at": at(10), "wake": ["s-1"]},          # 進房、換主持：不算找他
+                  {"seq": 2, "type": "owner", "at": at(10), "wake": ["s-1"]},
+                  {"seq": 3, "type": "post", "at": at(3600), "wake": ["s-1"]},        # 一小時前的積壓
+                  {"seq": 4, "type": "post", "at": at(10), "wake": ["s-2"]}]          # 找別人
+        self.assertEqual(dispatch.calls_for("s-1", events, now), [])
+        events.append({"seq": 5, "type": "post", "at": at(30), "wake": ["s-1"]})
+        self.assertEqual([e["seq"] for e in dispatch.calls_for("s-1", events, now)], [5])
+
     def test_transcript_gives_cwd_and_last_permission_mode(self):
         rows = [{"type": "permission-mode", "permissionMode": "default"}, {"type": "user", "cwd": "/srv/a"},
                 {"type": "permission-mode", "permissionMode": "auto"}, {"type": "assistant", "cwd": "/srv/b"}]

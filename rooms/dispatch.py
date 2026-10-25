@@ -77,6 +77,7 @@ for _entry in (os.environ.get("ROOMS_CLAUDE_HOMES", "").strip() or "~/.claude").
         _path = os.path.expanduser(_path)
         CLAUDE_NAMES[_name or os.path.basename(_path)] = _path
 CLAUDE_MEMBERS = os.path.expanduser("~/.local/state/agent-rooms/claude-members")
+REOPEN_FRESH = 600        # 只為這段時間內真的有人找它（發言叫醒它）開視窗；進房、換主持這類事件和舊的積壓不算
 REOPEN_GAP = 180          # 開過視窗後這段時間內不再開（等它起來、hook 接手）   # 視窗自己握著對話、沒接背景服務：daemon 確定沒收下
 
 
@@ -508,11 +509,40 @@ def open_claude(session, name, cwd, mode):
     return None
 
 
+def calls_for(session, events, now=None):
+    """這批裡真的在找他的：發言或任務、叫醒名單有他、而且是最近的。"""
+    now = now or time.time()
+    fresh = []
+    for e in events:
+        try:
+            at = datetime.datetime.fromisoformat(e["at"]).timestamp()
+        except (KeyError, ValueError):
+            continue
+        if e.get("type") in ("post", "task") and session in (e.get("wake") or ()) and now - at < REOPEN_FRESH:
+            fresh.append(e)
+    return fresh
+
+
+def reopened(session, seq=None):
+    """開過視窗的那一批到第幾則（存檔：轉送程式重啟也不會同一批再開一次）。"""
+    path = os.path.expanduser(f"~/.local/state/agent-rooms/reopen-{session}.seq")
+    if seq is not None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(f"{seq} {time.time()}")
+    try:
+        with open(path) as fh:
+            got, at = fh.read().split()
+        return int(got), float(at)
+    except (OSError, ValueError):
+        return 0, 0.0
+
+
 class ClaudeWorker(Worker):
     """替房裡的 Claude 盯著：平常什麼都不做（hook 會處理）；視窗關了又有人找它才開視窗接回。"""
 
     def run(self):
-        opened, opened_seq = 0, 0
+        opened_seq, opened = reopened(self.session)
         while not self.stop:
             try:
                 got = call("GET", "/api/listen", session=self.session, wait=30, triggers_only=1,
@@ -522,7 +552,10 @@ class ClaudeWorker(Worker):
                 if claude_alive(self.session):
                     time.sleep(15)              # 開著：Stop／PostToolUse hook 會送，這裡不插手
                     continue
-                events = got["events"]
+                events = calls_for(self.session, got["events"])
+                if not events:
+                    time.sleep(15)              # 沒有人真的在找他（只是進房、換主持這類事件，或很久以前的）：不開視窗
+                    continue
                 if time.time() - opened < REOPEN_GAP:
                     time.sleep(15)
                     continue
@@ -542,6 +575,7 @@ class ClaudeWorker(Worker):
                     time.sleep(BACKOFF["desktop_closed"])
                     continue
                 opened, opened_seq = time.time(), events[-1]["seq"]
+                reopened(self.session, opened_seq)
                 self.reported = None
                 self.note("reopen", f"視窗關了，開新視窗接回這個對話（{len(events)} 則等著）")
             except Exception as error:
