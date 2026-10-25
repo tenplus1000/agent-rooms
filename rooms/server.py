@@ -145,6 +145,8 @@ def make_handler(core, remote=False):
                     return core.set_owner(actor, room_id, a["session"])
                 if sub == "delete" and method == "POST":
                     return core.delete_room(actor, room_id)
+                if sub == "hops" and method == "POST":
+                    return core.set_hops(actor, room_id, a.get("limit", 0))
                 if sub == "resume" and method == "POST":
                     return core.resume(actor, room_id)
                 if sub == "name" and method == "POST":

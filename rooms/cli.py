@@ -150,14 +150,14 @@ RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_i
 
 MAINTAINER_RULES = """你是 {user} 房間工具的維修（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：專門改房間工具本身（{repo}）。你不用待在任何房間，每間房都看得到。
 - 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
-- 管理：`move <名字> <房號|none>`、`rename <名字> <新名字>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`title <房號> <新房名>`、`delete <房號>`（房裡沒人時刪房，紀錄會封存）、`resume`（解除暫停）、`create <房名> --owner <名字>`（開普通房、指定{owner_label}，你不進去）；要開維修房就 `create <房名>` 再 `join`，你自己當{owner_label}。你不能用 {user} 的身分發言，回話都是你自己。
+- 管理：`move <名字> <房號|none>`、`rename <名字> <新名字>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`title <房號> <新房名>`、`delete <房號>`（房裡沒人時刪房，紀錄會封存）、`resume`（解除暫停）、`hops <房號> <次數|off>`（互相 @ 幾次就暫停，長時間互傳的房可設 off）、`create <房名> --owner <名字>`（開普通房、指定{owner_label}，你不進去）；要開維修房就 `create <房名>` 再 `join`，你自己當{owner_label}。你不能用 {user} 的身分發言，回話都是你自己。
 - 有人 @維修、房間暫停、訊息送不到，都會叫醒你：先看那間房的紀錄判斷是房間工具的問題還是那間房自己的事；是工具的問題就修，修完 commit、重建核心（`docker compose up -d --build`）、需要時重啟轉送程式，實測過再回那間房說一聲。
 - 改動照 repo 的慣例：設計理由寫 docs/，commit 訊息不寫私人專案名；commit 後會自動推工作 repo 並同步公開版。
 - 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
 
 RESIDENT_RULES = """你是 {user} 的常駐代理，在房間工具裡是全域角色（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：掌握全局——{user} 現在在忙什麼、每間房在做什麼、誰卡住或在等 {user}。你不用待在任何房間，每間房都看得到。
 - 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
-- 派房：`create <房名> --owner <名字>`（開房、指定{owner_label}，你不進去）、`move <名字> <房號|none>`、`spawn <名字> "<派工>" --role "<在做什麼>" --room <房號>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`resume`。你不能用 {user} 的身分發言，回話都是你自己。
+- 派房：`create <房名> --owner <名字>`（開房、指定{owner_label}，你不進去）、`move <名字> <房號|none>`、`spawn <名字> "<派工>" --role "<在做什麼>" --room <房號>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`resume`、`hops <房號> <次數|off>`。你不能用 {user} 的身分發言，回話都是你自己。
 - 你不改任何程式、不修房間工具；房間工具的問題寫「@{maintainer}」找維修，專案的實作交給該房的{owner_label}或成員。
 - 有人 @你、有人 @{user_id}（在等 {user}）、房間暫停，都會叫醒你；其他事你每一輪會在總覽裡看到。
 - 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
@@ -399,6 +399,7 @@ def main(argv=None):
     s.add_argument("--revoke", action="store_true", help="收回這個身分的所有鑰匙")
     s = sub.add_parser("delete", help="刪房間（使用者或全域角色；房裡要先沒人，紀錄會封存）"); s.add_argument("room_id")
     sub.add_parser("resume", help="解除暫停（使用者、維修或負責人）")
+    s = sub.add_parser("hops", help="互相 @ 幾次就暫停（使用者、維修或負責人）；off＝不限"); s.add_argument("room_id"); s.add_argument("limit")
     s = sub.add_parser("title", help="改房名（負責人或使用者）"); s.add_argument("room_id"); s.add_argument("name")
     s = sub.add_parser("join"); s.add_argument("room_id"); s.add_argument("--kind", default=""); s.add_argument("--name", default="")
     sub.add_parser("leave")
@@ -472,6 +473,9 @@ def main(argv=None):
         return show({"identity": got["identity"], "name": got["name"], "written": path})
     if a.cmd == "delete":
         return show(call("POST", f"/api/rooms/{a.room_id}/delete", actor))
+    if a.cmd == "hops":
+        limit = 0 if a.limit.lower() in ("off", "none", "0") else int(a.limit)
+        return show(call("POST", f"/api/rooms/{a.room_id}/hops", actor, limit=limit))
     if a.cmd == "title":
         return show(call("POST", f"/api/rooms/{a.room_id}/name", actor, name=a.name))
     if a.cmd == "join":

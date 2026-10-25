@@ -31,10 +31,12 @@ GLOBAL_KINDS = {
     "resident": ("mention", "user", "paused"),
 }
 ONLINE_SECONDS = 75          # 監聽一輪最長 50 秒，再寬一點才算離線
-MAX_HOPS = 60                # agent 之間連續互相 @ 幾次就暫停，等使用者開口（agentchattr 的 loop guard）
+MAX_HOPS = int(os.environ.get("ROOMS_MAX_HOPS", "60"))   # agent 之間連續互相 @ 幾次就暫停（agentchattr 的 loop guard）；每間房可另設，0＝不限
 JUDGE_CONTEXT = 4             # 判官看這則之前最近幾則發言（看得出誰派的工作）
-PAUSED_TEXT = (f"房間暫停了：agent 之間連續互相 @ 超過 {MAX_HOPS} 次（{USER_NAME} 一直沒出現），之後的訊息照記但不叫醒任何人。"
-               f"{USER_NAME} 在房裡、或在任何一個成員自己的對話裡講一句話就恢復；請負責人告訴 {USER_NAME}。")
+def paused_text(limit):
+    return (f"房間暫停了：agent 之間連續互相 @ 超過 {limit} 次（{USER_NAME} 一直沒出現），之後的訊息照記但不叫醒任何人。"
+            f"{USER_NAME} 在房裡、或在任何一個成員自己的對話裡講一句話就恢復；請負責人告訴 {USER_NAME}。"
+            f"這間房常需要長時間互傳的話，可以用 hops 調高上限或設成 off。")
 EVERYONE = ("all", "全部", "大家")
 MENTION = re.compile(r"@([\w\-\.㐀-鿿]+)")
 
@@ -285,6 +287,24 @@ class Core:
             self._commit()
             return dict(self.state["rooms"][room_id])
 
+    def set_hops(self, actor, room_id, limit):
+        """互相 @ 的上限：負責人、使用者或維修；0＝不限（同時解除暫停）。"""
+        limit = int(limit)
+        if limit < 0:
+            raise RoomError("上限要是 0（不限）或正整數")
+        with self.cond:
+            if not self._is_room_owner(actor, room_id):
+                raise RoomError("只有使用者、維修或負責人能改互相 @ 的上限", 403)
+            room = self._room(room_id)
+            room["max_hops"] = limit
+            if room.get("paused") and (not limit or room.get("hops", 0) <= limit):
+                room["paused"] = False
+                for thread in self.state["threads"].values():
+                    if thread["room_id"] == room_id and thread["kind"] == "paused" and not thread.get("closed"):
+                        thread.update(closed=_now(), closed_by=actor, note=f"{self.name_of(actor)} 調整上限")
+            self._commit()
+            return {"room_id": room_id, "max_hops": limit, "hops": room.get("hops", 0), "paused": bool(room.get("paused"))}
+
     def rename_room(self, actor, room_id, name):
         """改房名：負責人或使用者。"""
         if not name.strip():
@@ -505,9 +525,10 @@ class Core:
             just_paused = False
             if actor != USER and wake:
                 room["hops"] = room.get("hops", 0) + 1
-                if room["hops"] > MAX_HOPS and not room.get("paused"):
+                limit = room.get("max_hops", MAX_HOPS)
+                if limit and room["hops"] > limit and not room.get("paused"):
                     room["paused"] = just_paused = True
-                    self._open_thread(room_id, USER, actor, PAUSED_TEXT, "paused")
+                    self._open_thread(room_id, USER, actor, paused_text(limit), "paused")
                 if room.get("paused"):
                     wake = []                       # 暫停中：訊息照記，不叫醒人
             held = bool(room.get("paused")) and actor != USER
@@ -517,7 +538,7 @@ class Core:
                 self._open_thread(room_id, target, actor, text, "mention", ref=event["seq"])
             if just_paused and (room["owner"] in members or self._woken_on("paused")):
                 # 負責人要知道房間停了（發話的人收到的 notice 不會轉告別人），由他告訴使用者；只叫這一次
-                self._emit(room_id, "paused", actor, text=PAUSED_TEXT,
+                self._emit(room_id, "paused", actor, text=paused_text(limit),
                            wake=[w for w in [room["owner"]] + self._woken_on("paused") if w])
             self._commit()
             if held:

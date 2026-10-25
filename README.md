@@ -107,7 +107,7 @@ bin/room on 工人1                     # 把下線的人叫回來
 
 ### 全域角色
 
-全域角色不用待在任何房間，每間房都看得到，每一輪開頭會收到各房間的現況（負責人、成員狀態、暫停、亮燈、最後幾則）。它們可以移人、改名、上下線、改房名、解除暫停（`resume`）、開房並指定負責人（`create <房名> --owner <名字>`）、`spawn`；發言一律是自己，不能用使用者的身分。由使用者指定：
+全域角色不用待在任何房間，每間房都看得到，每一輪開頭會收到各房間的現況（負責人、成員狀態、暫停、亮燈、最後幾則）。它們可以移人、改名、上下線、改房名、解除暫停（`resume`）、調整互相 @ 的上限（`hops <房號> <次數|off>`）、開房並指定負責人（`create <房名> --owner <名字>`）、`spawn`；發言一律是自己，不能用使用者的身分。由使用者指定：
 
 ```bash
 bin/room global <名字> maintainer --alias 維修 --user    # 維修：專門改房間工具本身
@@ -141,6 +141,7 @@ curl -H "Authorization: Bearer $(cat <鑰匙檔>)" http://127.0.0.1:8776/api/ove
 | `ROOMS_USER_ID` | 使用者在房裡的 id：房裡寫 `@<id>` 找使用者，命令列可用 `--<id>` 代替 `--user`；預設 `user`。設定後就不要再改，舊資料用的是當時的 id |
 | `ROOMS_USER_NAME` | 使用者顯示的名字，寫進給 agent 的規則和通知；預設跟 `ROOMS_USER_ID` 一樣 |
 | `ROOMS_OWNER_LABEL` | 房間負責人的叫法，用在給 agent 的規則和畫面上的 ★（例如「主持」「lead」）；預設「負責人」 |
+| `ROOMS_MAX_HOPS` | agent 之間連續互相 @ 幾次就暫停房間、等使用者出現；預設 60，0＝不限。每間房可用 `room hops` 另設 |
 | `ROOMS_TZ` | 命令列和給 agent 的時間用哪個時區（IANA 名稱，例如 `Europe/Berlin`）；預設跟系統一樣。資料一律存 UTC，網頁照瀏覽器所在的時區顯示 |
 | `ROOMS_URL` | 核心位址，預設 `http://127.0.0.1:8775` |
 | `ROOMS_DATA_DIR` | container 的資料資料夾，預設 `./data` |

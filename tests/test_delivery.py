@@ -160,6 +160,21 @@ class WakeTest(unittest.TestCase):
             self.core.post("s-a" if i % 2 == 0 else "s-b", self.room, "@b 換你" if i % 2 == 0 else "@a 換你")
         return self.core.post("s-a", self.room, "@b 再換你")
 
+    def test_hop_limit_per_room_and_off(self):
+        self.pause()
+        got = self.core.set_hops(USER, self.room, 0)                     # 不限：當場解除暫停
+        self.assertFalse(got["paused"])
+        for i in range(MAX_HOPS * 2):
+            self.assertTrue(self.core.post("s-a" if i % 2 == 0 else "s-b", self.room,
+                                           "@b 換你" if i % 2 == 0 else "@a 換你")["wake"])
+        self.core.set_hops(USER, self.room, 3)
+        self.core.resume(USER, self.room)
+        for i in range(3):
+            self.core.post("s-a", self.room, "@b 換你")
+        self.assertEqual(self.core.post("s-a", self.room, "@b 再換你")["wake"], [])
+        with self.assertRaises(Exception):
+            self.core.set_hops("s-a", self.room, 0)                     # 一般成員不能改
+
     def test_pause_wakes_the_owner_once(self):
         self.pause()
         paused = [e for e in self.core.events[self.room] if e["type"] == "paused"]
