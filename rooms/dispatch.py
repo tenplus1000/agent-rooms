@@ -628,8 +628,77 @@ def render_claude(room, session, events):
             "\n\n房間的新訊息：\n" + "\n".join(lines))
 
 
+HINT_EVERY = 120          # 每隔幾秒看一次有沒有新下線、還沒判過的對話
+
+
+def _tail_lines(path, size=200000):
+    with open(path, "rb") as fh:
+        fh.seek(0, 2)
+        start = max(0, fh.tell() - size)
+        fh.seek(start)
+        lines = fh.read().decode("utf-8", "replace").splitlines()
+    return lines[1:] if start else lines            # 從中間切進去的第一行不完整
+
+
+def last_words(session, kind):
+    """對話最後一段 agent 自己說的話（Codex 的 rollout、Claude 的 transcript）；找不到回空字串。"""
+    if kind == "codex":
+        roots = {WSL_SESSIONS, DESKTOP_SESSIONS} | {os.path.join(h, "sessions") for h in ACCOUNTS}
+        files = [f for r in roots for f in glob.glob(os.path.join(r, "*", "*", "*", f"*{session}*.jsonl"))]
+    else:
+        homes = {CLAUDE_HOME} | set(CLAUDE_NAMES.values())
+        files = [f for h in homes for f in glob.glob(os.path.join(h, "projects", "*", session + ".jsonl"))]
+    text = ""
+    for path in files[:1]:
+        for line in _tail_lines(path):
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            p = row.get("payload") or {}
+            if p.get("type") == "message" and p.get("role") == "assistant":
+                text = " ".join(c.get("text", "") for c in p.get("content", []) if c.get("type") == "output_text") or text
+            elif row.get("type") == "assistant":
+                content = (row.get("message") or {}).get("content") or []
+                text = " ".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text") or text
+    return " ".join(text.split())[-400:]
+
+
+def own_objective(session):
+    """acc 記的這個對話自己的目標（沒有現行的就拿最後一個，附狀態）。"""
+    from rooms.cli import acc_session, eval_list
+    info = acc_session(session)
+    if info.get("objective"):
+        return f"{info['objective']}（{info.get('status') or '進行中'}）"
+    history = eval_list(info.get("history"))
+    if history:
+        last = history[-1]
+        return f"{last.get('objective', '')}（{last.get('status') or last.get('result') or '已結束'}）"
+    return ""
+
+
+def hint_loop():
+    """下線、還沒收起來的對話：帶著主機上才有的證據（目標、對話最後一段）請核心問判官該不該收起來。"""
+    while True:
+        try:
+            for a in call("GET", "/api/overview")["agents"]:
+                off = a.get("off")
+                if not off or a.get("shelved"):
+                    continue
+                key = str(off.get("at"))
+                hint = a.get("shelve_hint") or {}
+                if hint.get("key") == key and (not hint.get("error") or time.time() - hint.get("at", 0) < 1800):
+                    continue                  # 判過了；判官出錯的半小時後再試
+                evidence = {"objective": own_objective(a["session"]), "last": last_words(a["session"], a["kind"])}
+                call("POST", "/api/shelve_hint", session=a["session"], evidence=evidence, key=key)
+        except Exception as error:
+            log("判官建議收起時出錯", error)
+        time.sleep(HINT_EVERY)
+
+
 def main():
     workers = {}
+    threading.Thread(target=hint_loop, daemon=True).start()
     log("轉送程式啟動，核心", BASE)
     while True:
         try:

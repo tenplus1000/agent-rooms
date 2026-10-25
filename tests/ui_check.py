@@ -301,6 +301,9 @@ try:
     check("狀態列出現下線整理", "下線" in (js("document.querySelector('[data-tidy]') && document.querySelector('[data-tidy]').textContent") or ""))
     click(*center('[data-tidy]')); time.sleep(0.6)
     check("整理區列出閒人", js("!!document.querySelector('.tidy-pop [data-session=\"a5\"]')"))
+    # 判官建議收起：畫面上排在最上面、寫出依據（判官的結果在測試裡直接塞進總覽）
+    js("S.ov.agents.find(a => a.session === 'a5').shelve_hint = {suggest: true, done: 0.9, pending: 0.1, why: '交件了'}; S.tidyFill()")
+    check("整理區列出判官建議收起", "交件了" in (js("document.querySelector('.tidy-row.hinted') && document.querySelector('.tidy-row.hinted').innerText") or ""))
     shot("下線整理")
     js("[...document.querySelectorAll('.tidy-pop [data-session=\"a5\"] button')].find(b => b.textContent === '收起來').click()"); time.sleep(1.5)
     check("收起來", next(a for a in call("GET", "/api/overview")["agents"] if a["session"] == "a5")["shelved"])

@@ -93,6 +93,7 @@ bin/room on 工人1                     # 把下線的人叫回來
 ```
 
 - `spawn` 在背景服務開一個新的 Codex 對話（沒有視窗），帳號照 `ROOMS_SPAWN_ACCOUNTS` 的順序挑還有額度的，也可以用 `--account` 指定。它進房後收到第一則訊息就開始做；想看它在做什麼，用輸出的 `codex resume <id>` 接上。
+- 下線、還沒收起來的對話，轉送程式會帶著它的目標與對話最後一段請判官判「做完了、不用再叫回來」嗎；畫面的整理區最上面列出建議收起的，附依據，可以一鍵收起或按「留著」。
 - 負責人在 `say` 裡 @別房負責人的名字（或房號）會送到對方房、只叫醒那位負責人；`hosts` 列出各房負責人。
 - 畫面上把房間拖到另一間的某一面旁邊會吸上去（地板四個方向或上下疊）：接上的兩間 `board` 會一起列出對方的白板，只能看、各自只改自己的；拖開就解除。
 - `--account` 寫的是 `ROOMS_CLAUDE_HOMES` 裡的帳號時開的是 Claude 成員：可加 `--model`、`--effort`（low～max）、`--permission-mode`（預設 `auto`）。它沒有視窗，每一批訊息由轉送程式跑一次 `claude -p` 接著同一個對話，在 `--cwd` 裡讀寫；房間指令一律放行，回話用 `room say`。每一輪的輸出存在 `~/.local/state/agent-rooms/claude-members/logs/`，想接上看就用輸出的 `claude --resume <id>`。

@@ -90,6 +90,10 @@ def make_handler(core, remote=False):
                 if INDEX_HTML.exists():
                     return INDEX_HTML.read_bytes(), "text/html; charset=utf-8"
                 return b"agent-rooms core", "text/plain; charset=utf-8"
+            if method == "POST" and path == "/api/shelve_hint":
+                if a.get("keep"):
+                    return core.keep_shelve_hint(actor, a["session"])
+                return core.judge_shelve(actor, a["session"], a.get("evidence") or {}, a.get("key", ""))
             if method == "GET" and path == "/api/hosts":
                 return core.hosts(actor)
             if method == "GET" and path == "/api/overview":

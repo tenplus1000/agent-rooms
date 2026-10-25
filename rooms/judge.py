@@ -88,3 +88,39 @@ def addressees(log_path, room_name, roles, speaker, text, targets, mentioned=(),
     except OSError:
         pass
     return probs, error
+
+
+# 下線的對話該不該收起來：兩題配對驗過（交件／額度用完、報告寫好／做到一半、目標達成／進行中、
+# 測試完／常駐、做完沒後續／問要不要接著做），都在那一處翻面。做完 ≥ 門檻且還有沒做完的 < 門檻才建議收。
+DONE = "這個對話手上的工作已經做完、交出去，或明確不用再做了嗎？"
+PENDING = "這個對話還有做到一半、或答應了還沒做的事，之後要叫它回來接著做嗎？"
+
+
+def shelve_hint(log_path, state):
+    """回 ({"done": 機率, "pending": 機率}, None)；叫不到回 (None, 錯誤)。每一發都記進 judge.jsonl。"""
+    questions = {"done": {"type": "noul", "instructions": DONE}, "pending": {"type": "noul", "instructions": PENDING}}
+    model = os.environ.get("ROOMS_JUDGE_MODEL", "").strip() or MODEL
+    row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "kind": "shelve",
+           "requested_model": model, "state": state, "questions": questions}
+    started = time.time()
+    probs, error = None, None
+    try:
+        headers = {"Content-Type": "application/json"}
+        if _key() and "openrouter.ai" in _url():
+            headers["Authorization"] = f"Bearer {_key()}"
+        body = json.dumps({"model": model, "state": state, "questions": questions}).encode("utf-8")
+        req = urllib.request.Request(_url(), data=body, method="POST", headers=headers)
+        with urllib.request.urlopen(req, timeout=float(os.environ.get("ROOMS_JUDGE_TIMEOUT", "8"))) as resp:
+            got = json.loads(resp.read().decode("utf-8"))
+        probs = {k: float(got["answers"][k]["noul"]) for k in questions}
+        row.update(model=got.get("model"), answers=got["answers"], cost=(got.get("usage") or {}).get("cost"))
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        row["error"] = error
+    row["elapsed"] = round(time.time() - started, 2)
+    try:
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    return probs, error

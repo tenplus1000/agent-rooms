@@ -505,6 +505,67 @@ class Core:
                 found.setdefault(*hit)
         return found
 
+    def shelve_state(self, session, evidence):
+        """給判官看的：這個下線對話是誰、在做什麼、為什麼下線、最後說了什麼（房間紀錄由核心補，對話紀錄由主機那邊帶來）。"""
+        agent = self._agent(session)
+        off = agent.get("off") or {}
+        days = (time.time() - off.get("at", time.time())) / 86400
+        kind = {"claude": "Claude", "codex": "Codex"}.get(agent["kind"], agent["kind"] or "agent")
+        lines = [f"對話「{agent['name']}」（{kind}），已經下線 {days:.0f} 天。" if days >= 1 else
+                 f"對話「{agent['name']}」（{kind}），剛下線（{days * 24:.0f} 小時內）。"]
+        if agent.get("role"):
+            lines.append(f"在做什麼：{agent['role']}")
+        if off.get("reason"):
+            lines.append(f"下線時記的原因：{off['reason']}（{self.name_of(off.get('by', ''))} 標的）")
+        if evidence.get("objective"):
+            lines.append(f"它自己的目標：{evidence['objective']}")
+        posts = [e for rows in self.events.values() for e in rows if e["type"] == "post" and e["from"] == session]
+        posts.sort(key=lambda e: e["at"])
+        if posts:
+            lines.append(f"它最後在房間說的話：「{posts[-1]['text'][:300]}」")
+        if evidence.get("last"):
+            lines.append(f"它的對話最後一段：「{evidence['last'][:300]}」")
+        return "\n".join(lines)
+
+    def judge_shelve(self, actor, session, evidence, key):
+        """判官判這個下線的對話該不該收起來，結果記在它身上（畫面的整理區照這個建議）。同一個 key 判過就不再問。"""
+        if actor and not self._admin(actor):
+            raise RoomError("只有使用者或全域角色能請判官判", 403)
+        with self.cond:
+            agent = self._agent(session)
+            if not agent.get("off") or agent.get("shelved"):
+                return None
+            hint = agent.get("shelve_hint") or {}
+            if hint.get("key") == key and not hint.get("error"):
+                return hint
+            state = self.shelve_state(session, evidence)
+        if not judge.enabled():
+            return None
+        probs, error = judge.shelve_hint(str(self.data / "judge.jsonl"), state)     # 不拿鎖：判官慢不卡房間
+        with self.cond:
+            agent = self._agent(session)
+            if error:
+                agent["shelve_hint"] = {"key": key, "error": error, "at": time.time()}
+            else:
+                why = (agent.get("off") or {}).get("reason") or evidence.get("objective") or evidence.get("last") or agent.get("role") or ""
+                agent["shelve_hint"] = {"key": key, "at": time.time(), "done": round(probs["done"], 3),
+                                        "pending": round(probs["pending"], 3),
+                                        "suggest": probs["done"] >= judge.THRESHOLD and probs["pending"] < judge.THRESHOLD,
+                                        "why": why[:120]}
+            self._commit()
+            return agent["shelve_hint"]
+
+    def keep_shelve_hint(self, actor, session):
+        """使用者說留著：這次下線不再建議收起（下次再下線會重新判）。"""
+        if actor and not self._admin(actor):
+            raise RoomError("只有使用者或全域角色能改", 403)
+        with self.cond:
+            hint = self._agent(session).get("shelve_hint")
+            if hint:
+                hint.update(suggest=False, kept=time.time())
+                self._commit()
+            return hint
+
     def set_role(self, actor, session, role):
         """成員在做什麼（一句話）。判官靠它判斷沒 @ 的訊息在找誰。使用者、負責人或本人可以改。"""
         with self.cond:
@@ -819,6 +880,7 @@ class Core:
             agent["off"] = {"at": time.time(), "by": actor, "reason": reason} if on else None
             if not on:
                 agent.pop("shelved", None)                # 回到線上就從收起來裡拿出來
+                agent.pop("shelve_hint", None)
             if room:
                 self._emit(room["room_id"], "off" if on else "on", session, by=actor, by_name=self.name_of(actor),
                            reason=reason)
@@ -1120,7 +1182,8 @@ class Core:
                                "room_id": a.get("room_id"), "online": self._online(a), "dnd": a["dnd"],
                                "off": a.get("off"), "headless": bool(a.get("headless")),
                                "role": a.get("role", ""), "seen": a.get("listening_at") or 0,
-                               "delivery": a.get("delivery"), "shelved": a.get("shelved")})
+                               "delivery": a.get("delivery"), "shelved": a.get("shelved"),
+                               "shelve_hint": a.get("shelve_hint")})
             rooms = []
             for rid in self.state["rooms"]:
                 view = self._room_view(rid)

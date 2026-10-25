@@ -47,6 +47,8 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 .tidy-row .who b { display: block; font-weight: 600; }
 .tidy-row .who small { display: block; color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tidy-row button { font-size: 11px; padding: 1px 8px; }
+.tidy-row .who small.why { color: var(--warn); }
+.tidy-judge { color: var(--text); }
 #stage { position: fixed; top: 44px; left: 0; right: 0; bottom: 96px; overflow: hidden; touch-action: none; cursor: grab; }
 #stage.panning { cursor: grabbing; }
 #world { position: absolute; left: 0; top: 0; width: 2600px; height: 1700px; transform-origin: 0 0; }
@@ -452,11 +454,29 @@ function tidyPanel() {
   const btn = (text, fn) => el("button", { text, on: { click: e => { e.stopPropagation(); fn(); } } });
   function fill() {
     pop.replaceChildren();
-    const off = offline(), loose = off.filter(a => !a.room_id), inRoom = off.filter(a => a.room_id);
+    const all = offline(), hinted = all.filter(a => (a.shelve_hint || {}).suggest);
+    const off = all.filter(a => !hinted.includes(a)), loose = off.filter(a => !a.room_id), inRoom = off.filter(a => a.room_id);
+    const judged = all.filter(a => a.shelve_hint && !a.shelve_hint.error).length;
     const shelved = agents().filter(a => a.shelved);
-    pop.append(el("div", { class: "name", text: `下線的人（${off.length}）` }),
+    pop.append(el("div", { class: "name", text: `下線的人（${all.length}）` }),
       el("div", { class: "sub", text: "拖名字進房間就是進房；收起來的不再出現在狀態列和 @ 名單，回到線上會自己拿出來" }));
     const list = el("div", { class: "tidy-list" });
+    // 判官建議收起的：做完了、沒有要叫回來接著做的（在房裡的先移出再收）
+    const shelveOne = a => (a.room_id ? api("POST", "/api/move", { session: a.session, room_id: "" }) : Promise.resolve())
+      .then(() => api("POST", "/api/shelve", { session: a.session, shelved: 1 }));
+    list.append(el("div", { class: "tidy-h tidy-judge" },
+      document.createTextNode(`判官建議收起（${hinted.length}）`),
+      el("small", { text: judged < all.length ? `・判過 ${judged}／${all.length}，其餘幾分鐘內判完` : "" }),
+      hinted.length ? btn("全部收起", () => call(Promise.all(hinted.map(shelveOne)), `收起 ${hinted.length} 個`)) : null));
+    for (const a of hinted.sort((x, y) => y.shelve_hint.done - x.shelve_hint.done)) {
+      const h = a.shelve_hint;
+      const r = row(a, btn("留著", () => call(api("POST", "/api/shelve_hint", { session: a.session, keep: 1 }), `${a.name} 留著，不再建議`)),
+        btn("收起來", () => call(shelveOne(a), `${a.name} 收起來了`)));
+      r.classList.add("hinted");
+      r.querySelector(".who").append(el("small", { class: "why", title: h.why || "",
+        text: `做完 ${Math.round(h.done * 100)}%・還有沒做完 ${Math.round(h.pending * 100)}%${a.room_id ? "・在 " + roomName(a.room_id) : ""}${h.why ? "・" + h.why : ""}` }));
+      list.append(r);
+    }
     if (loose.length) {
       list.append(el("div", { class: "tidy-h" }, document.createTextNode(`沒進房（${loose.length}）`),
         btn("全部收起來", () => call(Promise.all(loose.map(a => api("POST", "/api/shelve", { session: a.session, shelved: 1 }))), `收起 ${loose.length} 個`))));
