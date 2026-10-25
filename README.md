@@ -142,6 +142,8 @@ curl -H "Authorization: Bearer $(cat <鑰匙檔>)" http://127.0.0.1:8776/api/ove
 | `ROOMS_USER_NAME` | 使用者顯示的名字，寫進給 agent 的規則和通知；預設跟 `ROOMS_USER_ID` 一樣 |
 | `ROOMS_OWNER_LABEL` | 房間負責人的叫法，用在給 agent 的規則和畫面上的 ★（例如「主持」「lead」）；預設「負責人」 |
 | `ROOMS_MAX_HOPS` | agent 之間連續互相 @ 幾次就暫停房間、等使用者出現；預設 60，0＝不限。每間房可用 `room hops` 另設 |
+| `ROOMS_CLAUDE_OPEN` | Claude 成員的視窗關了又有人找它時，轉送程式用這個指令開新視窗接回對話；`{script}` 換成要跑的腳本、`{title}` 換成名字。沒設時在 WSL 用 Windows Terminal 開 WSL 分頁，其他系統不開只記錄 |
+| `ROOMS_WSL_DISTRO` | 上面那個 WSL 分頁用哪個發行版；預設目前的發行版，再不然 Ubuntu |
 | `ROOMS_TZ` | 命令列和給 agent 的時間用哪個時區（IANA 名稱，例如 `Europe/Berlin`）；預設跟系統一樣。資料一律存 UTC，網頁照瀏覽器所在的時區顯示 |
 | `ROOMS_URL` | 核心位址，預設 `http://127.0.0.1:8775` |
 | `ROOMS_DATA_DIR` | container 的資料資料夾，預設 `./data` |

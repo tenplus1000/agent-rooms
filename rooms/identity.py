@@ -17,6 +17,8 @@ import os
 USER = (os.environ.get("ROOMS_USER_ID", "").strip() or "user").lower()
 USER_NAME = os.environ.get("ROOMS_USER_NAME", "").strip() or USER
 OWNER_LABEL = os.environ.get("ROOMS_OWNER_LABEL", "").strip() or "負責人"
+# 轉送程式替關掉的 Claude 視窗重開時送的第一句開頭：hook 看到它就知道不是使用者開口
+REOPEN_MARK = "【房間叫醒】"
 
 
 def local_time(iso, fmt="%m-%d %H:%M"):

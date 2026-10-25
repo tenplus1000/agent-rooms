@@ -16,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from rooms.identity import OWNER_LABEL, USER, USER_NAME, local_time
+from rooms.identity import OWNER_LABEL, REOPEN_MARK, USER, USER_NAME, local_time
 
 USER_FLAG = [f"--{USER}"] if USER != "user" else []   # 例如 --alex：使用者的 id 也能當旗標
 
@@ -191,7 +191,8 @@ def hook():
         if not me:
             return
         # 房間叫醒那一輪也會觸發 UserPromptSubmit（task-notification），那不是使用者開口
-        user_typed = full and "<task-notification>" not in str(payload.get("prompt", ""))[:200]
+        head = str(payload.get("prompt", ""))[:200]
+        user_typed = full and "<task-notification>" not in head and not head.startswith(REOPEN_MARK)
         if user_typed:
             _quick("POST", "/api/user_here", {"session": session})   #使用者在場：互相 @ 的計數歸零
         if user_typed and me.get("off"):

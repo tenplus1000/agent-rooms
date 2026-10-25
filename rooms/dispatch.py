@@ -1,6 +1,8 @@
 """轉送程式：替房裡的 Codex 監聽，該叫醒時用轉接器送進它的對話。跑在本機，不進 container。
 
-Claude 不經過這裡：每一輪結束時 Stop hook 在背景等房間、有人找就叫醒它，做事中途由 PostToolUse hook 補送。
+Claude 平常不經過這裡：每一輪結束時 Stop hook 在背景等房間、有人找就叫醒它，做事中途由 PostToolUse hook 補送。
+只有視窗關掉了（沒有程式開著那個對話，Stop hook 也跟著沒了）又有人找它時，這裡替它開一個新視窗
+接回那個對話（ClaudeWorker），第一句以 REOPEN_MARK 開頭，房間的新訊息由 UserPromptSubmit hook 帶進去。
 
 每個 Codex 一條執行緒：
   1. 對核心長輪詢（只等「該叫醒他」的事件，不推進游標、不算心跳）
@@ -29,7 +31,7 @@ import urllib.parse
 import urllib.request
 
 from rooms import paths
-from rooms.identity import OWNER_LABEL, USER, USER_NAME
+from rooms.identity import OWNER_LABEL, REOPEN_MARK, USER, USER_NAME
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = os.environ.get("ROOMS_URL", "http://127.0.0.1:8775")
@@ -59,7 +61,15 @@ OWN_ECHO = 20             # 我們自己送進去的那一輪也會觸發 hook�
 AFTER_CHECK = 8           # 送出後幾秒回頭確認那一輪有沒有跑起來
 CAP_PER_HOUR = 30         # 每個 agent 每小時最多被房間叫醒幾次
 BACKOFF = {"unavailable": 600, "desktop_closed": 300, "race": 3, "error": 60, "detached": 60, "user_turn": 5}
-DETACHED = "already has an active writer"   # 視窗自己握著對話、沒接背景服務：daemon 確定沒收下
+DETACHED = "already has an active writer"
+CLAUDE_HOME = os.path.expanduser(os.environ.get("ROOMS_CLAUDE_HOME", "~/.claude"))
+CLAUDE_BIN = os.environ.get("ROOMS_CLAUDE_BIN", "").strip() or next(
+    (p for p in (os.path.expanduser("~/.local/bin/claude"), "/usr/local/bin/claude", "/usr/bin/claude") if os.path.exists(p)), "claude")
+# 重開 Claude 視窗的指令：{script} 換成要跑的 shell 腳本、{title} 換成視窗標題。沒設時在 WSL 用 Windows Terminal
+# 開一個 WSL 分頁（發行版 ROOMS_WSL_DISTRO，預設 Ubuntu）；不是 WSL 又沒設就不開，只記錄
+CLAUDE_OPEN = os.environ.get("ROOMS_CLAUDE_OPEN", "").strip()
+WSL_DISTRO = os.environ.get("ROOMS_WSL_DISTRO", "").strip() or os.environ.get("WSL_DISTRO_NAME", "") or "Ubuntu"
+REOPEN_GAP = 180          # 開過視窗後這段時間內不再開（等它起來、hook 接手）   # 視窗自己握著對話、沒接背景服務：daemon 確定沒收下
 
 
 def call(method, path, **params):
@@ -389,15 +399,114 @@ class Worker(threading.Thread):
             self.fail("failed_after", "訊息送進去了，但那一輪沒跑起來（對話變成錯誤狀態，常見是額度用完）", events)
 
 
+def claude_alive(session):
+    """有沒有程式開著這個 Claude 對話：~/.claude/sessions/<pid>.json 記著 pid 與對話 id，pid 還在、啟動時間對得上才算。"""
+    for path in glob.glob(os.path.join(CLAUDE_HOME, "sessions", "*.json")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                info = json.load(fh)
+            if info.get("sessionId") != session:
+                continue
+            with open(f"/proc/{info['pid']}/stat") as fh:
+                started = fh.read().rsplit(")", 1)[1].split()[19]
+            if not info.get("procStart") or str(info["procStart"]) == started:
+                return True
+        except (OSError, ValueError, KeyError, IndexError):
+            continue
+    return False
+
+
+def claude_transcript(session):
+    """這台機器上（不是 Windows 桌面版）的對話紀錄：回傳 (紀錄路徑, 工作資料夾, 權限模式)；找不到回 None。"""
+    found = glob.glob(os.path.join(CLAUDE_HOME, "projects", "*", session + ".jsonl"))
+    if not found:
+        return None
+    cwd, mode = None, None
+    with open(found[0], encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if '"cwd"' not in line and '"permission-mode"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("type") == "permission-mode":
+                mode = row.get("permissionMode") or mode
+            cwd = row.get("cwd") or cwd
+    return found[0], cwd or os.path.expanduser("~"), mode
+
+
+def open_claude(session, name, cwd, mode):
+    """開一個新視窗接回這個 Claude 對話。成功回 None，不行就回原因。"""
+    state = os.path.expanduser("~/.local/state/agent-rooms")
+    os.makedirs(state, exist_ok=True)
+    script = os.path.join(state, f"reopen-{session}.sh")
+    prompt = f"{REOPEN_MARK}你的視窗關掉了，房間有人找你；新訊息附在下面，照平常處理。"
+    args = [CLAUDE_BIN, "--resume", session] + (["--permission-mode", mode] if mode else []) + [prompt]
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/bash -l\n# 房間轉送程式產生：接回關掉的 Claude 對話\n"
+                 f"cd {json.dumps(cwd)} || cd ~\nexec " + " ".join(json.dumps(a, ensure_ascii=False) for a in args) + "\n")
+    os.chmod(script, 0o700)
+    if CLAUDE_OPEN:
+        command = CLAUDE_OPEN.format(script=script, title=name)
+        subprocess.Popen(command, shell=True, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return None
+    home = paths.windows_home()
+    if not home:
+        return "不是 WSL，也沒設 ROOMS_CLAUDE_OPEN，不知道怎麼開視窗"
+    wt = home / "AppData" / "Local" / "Microsoft" / "WindowsApps" / "wt.exe"
+    wsl = ["wsl.exe", "-d", WSL_DISTRO, "--", "bash", "-l", script]
+    command = [str(wt), "-w", "new", "--title", name] + wsl if wt.exists() else \
+        ["/mnt/c/Windows/system32/cmd.exe", "/c", "start", name] + wsl
+    subprocess.Popen(command, cwd="/mnt/c", start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return None
+
+
+class ClaudeWorker(Worker):
+    """替房裡的 Claude 盯著：平常什麼都不做（hook 會處理）；視窗關了又有人找它才開視窗接回。"""
+
+    def run(self):
+        opened = 0
+        while not self.stop:
+            try:
+                got = call("GET", "/api/listen", session=self.session, wait=30, triggers_only=1,
+                           consume=0, heartbeat=0)
+                if not got["events"] or self.stop:
+                    continue
+                if claude_alive(self.session):
+                    time.sleep(15)              # 開著：Stop／PostToolUse hook 會送，這裡不插手
+                    continue
+                if time.time() - opened < REOPEN_GAP:
+                    time.sleep(15)
+                    continue
+                found = claude_transcript(self.session)
+                events = got["events"]
+                if not found:
+                    time.sleep(60)              # 不在這台的紀錄裡（例如 Windows 桌面版）：交給它那邊的 hook
+                    continue
+                name = next((a["name"] for a in call("GET", "/api/overview")["agents"] if a["session"] == self.session), self.session[:8])
+                why = open_claude(self.session, name, found[1], found[2])
+                if why:
+                    self.fail("desktop_closed", f"視窗關了，{why}；訊息留著", events)
+                    time.sleep(BACKOFF["desktop_closed"])
+                    continue
+                opened = time.time()
+                self.reported = None
+                self.note("reopen", f"視窗關了，開新視窗接回這個對話（{len(events)} 則等著）")
+            except Exception as error:
+                log(self.session[:8], "Claude 盯著時出錯", error)
+                time.sleep(BACKOFF["error"])
+
+
 def main():
     workers = {}
     log("轉送程式啟動，核心", BASE)
     while True:
         try:
             agents = call("GET", "/api/overview")["agents"]
-            wanted = {a["session"] for a in agents if a["kind"] == "codex" and a.get("room_id")}
-            for session in wanted - workers.keys():
-                workers[session] = Worker(session)
+            wanted = {a["session"]: a["kind"] for a in agents if a["kind"] in ("codex", "claude") and a.get("room_id")}
+            for session in wanted.keys() - workers.keys():
+                workers[session] = (ClaudeWorker if wanted[session] == "claude" else Worker)(session)
                 workers[session].start()
                 log(session[:8], "開始替它監聽")
             for session in list(workers.keys() - wanted):
