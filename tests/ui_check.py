@@ -151,6 +151,23 @@ try:
     check("彈窗打開", js("document.querySelectorAll('.win').length") == 1)
     check("彈窗有那則訊息", "我做完第一份了" in (js("document.querySelector('.win .log').innerText") or ""))
     shot("彈窗")
+    # 搜尋對話：打字標出符合的、跳到最新那則；Esc 先關搜尋再關彈窗
+    for t in ("第二份交了", "順便說第一份有改"):
+        call("POST", f"/api/rooms/{r1}/post", text=t, **{"as": "a2"})
+    time.sleep(2.5)
+    click(*center(".win header button[title^='搜尋']")); time.sleep(0.4)
+    check("搜尋框打開", js("!!document.querySelector('.win .find input')") and js("document.activeElement === document.querySelector('.win .find input')"))
+    type_text("第一份"); time.sleep(0.8)
+    check("搜尋找到兩則", js("document.querySelector('.win .find .n').textContent") == "2/2")
+    check("搜尋停在最新那則", "順便說" in (js("document.querySelector('.win .msg.cur').innerText") or ""))
+    check("符合的字有標記", js("document.querySelectorAll('.win mark').length") == 2)
+    key("Enter"); time.sleep(0.4)
+    check("Enter 跳到前一則", js("document.querySelector('.win .find .n').textContent") == "1/2"
+          and "我做完第一份了" in (js("document.querySelector('.win .msg.cur').innerText") or ""))
+    shot("搜尋")
+    key("Escape"); time.sleep(0.5)
+    check("Esc 先關搜尋", js("document.querySelectorAll('.win').length") == 1 and not js("!!document.querySelector('.win .find')")
+          and js("document.querySelectorAll('.win mark').length") == 0)
     key("Escape"); time.sleep(0.8)
     check("Esc 關彈窗", js("document.querySelectorAll('.win').length") == 0)
     # 選房間 → 輸入框送到那間

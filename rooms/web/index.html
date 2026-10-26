@@ -93,6 +93,13 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 .msg.sys { color: var(--dim); font-size: 12px; }
 .msg.mine .meta b { color: var(--accent); }
 .wake { color: var(--dim); font-size: 11px; }
+.find { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.find input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+  padding: 4px 8px; font: inherit; }
+.find .n { color: var(--dim); font-size: 12px; min-width: 44px; text-align: right; }
+.msg mark { background: rgba(240,183,47,.35); color: inherit; border-radius: 2px; }
+.msg.cur { outline: 1px solid var(--warn); outline-offset: 3px; border-radius: 4px; }
+.msg.cur mark { background: var(--warn); color: #0b1220; }
 .layer { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 50; display: flex; align-items: center; justify-content: center; }
 .dialog { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; width: min(420px, 92vw); }
 .dialog h3 { margin: 0 0 10px; font-size: 15px; }
@@ -552,6 +559,7 @@ async function openWin(roomId) {
   const log = el("div", { class: "log" });
   const win = el("div", { class: "win", style: `left:${Math.min(innerWidth - 480, 80 + n * 40)}px;top:${80 + n * 34}px` },
     el("header", {}, el("span", { class: "t", text: r.desk ? r.name : `${r.name}（${r.room_id}）` }),
+      el("button", { text: "搜尋", title: "搜尋這間房的對話", on: { click: () => openFind(roomId) } }),
       el("button", { text: "白板", on: { click: () => showBoard(roomId) } }),
       el("button", { text: "✕", title: "關掉（變回泡泡）", on: { click: () => closeWin(roomId) } })),
     log);
@@ -564,6 +572,7 @@ async function openWin(roomId) {
 }
 function closeWin(roomId) {
   const w = S.wins[roomId]; if (!w) return;
+  if (w.find) w.find.close();
   w.el.remove(); delete S.wins[roomId];
   S.layers = S.layers.filter(l => l.id !== "win:" + roomId);
   render();
@@ -574,7 +583,9 @@ async function refreshWin(roomId) {
   const atBottom = w.log.scrollTop + w.log.clientHeight >= w.log.scrollHeight - 30;
   for (const e of rows) {
     w.last = Math.max(w.last, e.seq);
-    w.log.append(msgEl(e));
+    const m = msgEl(e);
+    w.log.append(m);
+    if (w.find && w.find.q && markMsg(m, w.find.q)) { w.find.hits.push(m); w.find.count(); }   // 搜尋開著時新進的也標
   }
   if (rows.length) { seenSeq[roomId] = w.last; store.set("seen", seenSeq); if (atBottom || rows.length === w.log.children.length) w.log.scrollTop = w.log.scrollHeight; }
 }
@@ -586,13 +597,78 @@ function msgEl(e) {
     return el("div", { class: "msg" + (mine ? " mine" : "") },
       el("div", { class: "meta" }, el("b", { text: e.from_name }), document.createTextNode(`　${at}　#${e.seq}`),
         woke ? el("span", { class: "wake", text: `　叫醒 ${woke}` }) : null),
-      document.createTextNode(e.text));
+      el("span", { class: "body", text: e.text }));
   }
   const words = { join: "進了房間", leave: "離開房間", whiteboard: e.neighbor ? `改了隔壁 ${e.neighbor_name} 的白板` : "改了白板", off: "下線了", on: "回到線上",
     room_created: "開了這間房", room_renamed: `把房名改成 ${e.name}`, owner: `把${OWNER()}換成 ${e.owner_name}`,
     linked: `把這間跟 ${e.other_name}（${e.other}）接上了，共用白板`, unlinked: `把這間跟 ${e.other_name}（${e.other}）拉開了`,
     paused: e.text, delivery: `〔送不到〕${e.detail || ""}`, task: `任務 ${e.task_id} ${e.action}：${e.objective || ""}` };
-  return el("div", { class: "msg sys", text: `${at}　${e.from_name} ${words[e.type] || e.type}` });
+  return el("div", { class: "msg sys" }, el("span", { class: "body", text: `${at}　${e.from_name} ${words[e.type] || e.type}` }));
+}
+
+// 搜尋對話（像 LINE）：打字就標出所有符合的訊息，從最新一則開始；Enter 往前一則、Shift+Enter 往後一則
+function markMsg(m, q) {
+  const body = m.querySelector(".body");
+  if (body._raw === undefined) body._raw = body.textContent;
+  const raw = body._raw, low = raw.toLowerCase(), name = (m.querySelector(".meta b") || {}).textContent || "";
+  if (!q) { body.textContent = raw; return false; }
+  const ql = q.toLowerCase();
+  if (!low.includes(ql)) { body.textContent = raw; return name.toLowerCase().includes(ql); }   // 搜名字也算
+  body.replaceChildren();
+  let i = 0, k;
+  while ((k = low.indexOf(ql, i)) >= 0) {
+    body.append(document.createTextNode(raw.slice(i, k)), el("mark", { text: raw.slice(k, k + q.length) }));
+    i = k + q.length;
+  }
+  body.append(document.createTextNode(raw.slice(i)));
+  return true;
+}
+async function openFind(roomId) {
+  const w = S.wins[roomId]; if (!w) return;
+  if (w.find) { w.find.input.focus(); w.find.input.select(); return; }
+  const input = el("input", { placeholder: "搜尋這間房的對話（名字或內容）" });
+  const n = el("span", { class: "n" });
+  const f = { q: "", hits: [], cur: -1, input };
+  const go = d => {
+    if (!f.hits.length) return;
+    if (f.hits[f.cur]) f.hits[f.cur].classList.remove("cur");
+    f.cur = (f.cur + d + f.hits.length) % f.hits.length;
+    f.hits[f.cur].classList.add("cur");
+    f.hits[f.cur].scrollIntoView({ block: "center" });
+    f.count();
+  };
+  f.count = () => { n.textContent = f.q ? (f.hits.length ? `${f.cur + 1}/${f.hits.length}` : "0 則") : ""; };
+  const run = async () => {
+    f.q = input.value.trim();
+    while (true) {                                     // 搜尋要整間房：還沒載完的先載完
+      const before = w.last;
+      await refreshWin(roomId);
+      if (w.last === before) break;
+    }
+    if (f.q !== input.value.trim()) return;            // 載的時候又打了字，交給下一次
+    w.log.querySelectorAll(".msg.cur").forEach(m => m.classList.remove("cur"));
+    f.hits = [...w.log.children].filter(m => markMsg(m, f.q));
+    f.cur = f.hits.length;
+    if (f.hits.length) go(-1); else f.count();         // 從最新一則開始
+  };
+  let timer;
+  input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(run, 200); });
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); go(e.shiftKey ? 1 : -1); }
+  });
+  const bar = el("div", { class: "find" }, input, n,
+    el("button", { text: "↑", title: "往前一則（Enter）", on: { click: () => go(-1) } }),
+    el("button", { text: "↓", title: "往後一則（Shift+Enter）", on: { click: () => go(1) } }),
+    el("button", { text: "✕", title: "關掉搜尋（Esc）", on: { click: () => f.close() } }));
+  const id = pushLayer(() => f.close());
+  f.close = () => {
+    S.layers = S.layers.filter(l => l.id !== id);
+    bar.remove(); delete w.find;
+    w.log.querySelectorAll(".msg").forEach(m => { markMsg(m, ""); m.classList.remove("cur"); });
+  };
+  w.find = f;
+  w.el.querySelector("header").after(bar);
+  input.focus();
 }
 async function showBoard(roomId) {
   let text;
