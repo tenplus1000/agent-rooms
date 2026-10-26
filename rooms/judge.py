@@ -16,6 +16,7 @@
 import datetime
 import json
 import os
+import re
 import time
 import urllib.request
 
@@ -113,6 +114,53 @@ def shelve_hint(log_path, state):
         body = json.dumps({"model": model, "state": state, "questions": questions}).encode("utf-8")
         req = urllib.request.Request(_url(), data=body, method="POST", headers=headers)
         with urllib.request.urlopen(req, timeout=float(os.environ.get("ROOMS_JUDGE_TIMEOUT", "8"))) as resp:
+            got = json.loads(resp.read().decode("utf-8"))
+        probs = {k: float(got["answers"][k]["noul"]) for k in questions}
+        row.update(model=got.get("model"), answers=got["answers"], cost=(got.get("usage") or {}).get("cost"))
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        row["error"] = error
+    row["elapsed"] = round(time.time() - started, 2)
+    try:
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    return probs, error
+
+
+# 負責人找別房負責人時，該找哪幾房：先只記不用（使用者點名的那幾房就是答案），對得夠準再讓負責人不用點名。
+# 題目用寫歌房問判官／台語／發文／預測準確率／代玩五則只換主題的訊息試過，各自翻到對的那一房。
+RELAY = "這則訊息問的事或要的東西，「{name}」（{rid}）這間房的主持答得出來、手上有，或跟那間房正在做的事直接相關嗎？只問這一間房。"
+
+
+def relay_state(rooms, sender, text):
+    """rooms：[(房號, 房名, 主持名字, 主持在做什麼, [(誰, 說了什麼)])]，不含發話的那間；sender：(房號, 房名, 主持名字)。
+    訊息裡的 @ 拿掉，判官看不到原本點了誰。"""
+    lines = ["房間工具裡有這些房，每間有一個主持："]
+    for rid, name, host, doing, recent in rooms:
+        lines.append(f"\n■ {name}（{rid}），主持 {host}" + (f"：{doing[:120]}" if doing else ""))
+        lines += [f"  - {who}：「{' '.join(said.split())[:140]}」" for who, said in recent]
+    bare = " ".join(re.sub(r"@\S+", "", text).split())
+    lines += ["", f"剛剛「{sender[1]}」（{sender[0]}）的主持 {sender[2]} 發了這則訊息給別房的主持：", f"「{bare}」"]
+    return "\n".join(lines)
+
+
+def relay_rooms(log_path, state, rooms, meta):
+    """問每一房相不相關，回 ({房號: 機率}, None)；叫不到回 (None, 錯誤)。meta（call、room_id、seq、chosen）一起記進 judge.jsonl。"""
+    questions = {rid: {"type": "noul", "instructions": RELAY.format(name=name, rid=rid)} for rid, name in rooms}
+    model = os.environ.get("ROOMS_JUDGE_MODEL", "").strip() or MODEL
+    row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "kind": "relay", **meta,
+           "requested_model": model, "state": state, "questions": questions}
+    started = time.time()
+    probs, error = None, None
+    try:
+        headers = {"Content-Type": "application/json"}
+        if _key() and "openrouter.ai" in _url():
+            headers["Authorization"] = f"Bearer {_key()}"
+        body = json.dumps({"model": model, "state": state, "questions": questions}).encode("utf-8")
+        req = urllib.request.Request(_url(), data=body, method="POST", headers=headers)
+        with urllib.request.urlopen(req, timeout=float(os.environ.get("ROOMS_JUDGE_TIMEOUT", "8")) * 2) as resp:
             got = json.loads(resp.read().decode("utf-8"))
         probs = {k: float(got["answers"][k]["noul"]) for k in questions}
         row.update(model=got.get("model"), answers=got["answers"], cost=(got.get("usage") or {}).get("cost"))

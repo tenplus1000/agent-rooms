@@ -506,6 +506,24 @@ class Core:
                 found.setdefault(*hit)
         return found
 
+    def _judge_relay(self, room_id, actor, text, seq, chosen):
+        """負責人點名找了別房：在背景問判官每一房相不相關，跟點名的對照記下（拿著鎖時呼叫，只取快照）。"""
+        rooms = []
+        for rid, r in self.state["rooms"].items():
+            if rid == room_id or r.get("desk") or not r.get("owner") or r["owner"] not in self.state["agents"]:
+                continue
+            host = self.state["agents"][r["owner"]]
+            recent = [(e["from_name"], e["text"]) for e in self.events.get(rid, []) if e["type"] == "post"
+                      and not (e.get("via") == room_id and e["text"].endswith(text))][-4:]   # 剛轉過去的那則會洩答案
+            rooms.append((rid, r["name"], host["name"], host.get("role") or "", recent))
+        if not rooms:
+            return
+        here = self.state["rooms"][room_id]
+        state = judge.relay_state(rooms, (room_id, here["name"], self.name_of(actor)), text)
+        meta = {"call": uuid.uuid4().hex[:12], "room_id": room_id, "seq": seq, "chosen": chosen}
+        threading.Thread(target=judge.relay_rooms, daemon=True,
+                         args=(str(self.data / "judge.jsonl"), state, [(r[0], r[1]) for r in rooms], meta)).start()
+
     def shelve_state(self, session, evidence):
         """給判官看的：這個下線對話是誰、在做什麼、為什麼下線、最後說了什麼（房間紀錄由核心補，對話紀錄由主機那邊帶來）。"""
         agent = self._agent(session)
@@ -713,6 +731,8 @@ class Core:
             self._commit()
             if relayed:
                 event = dict(event, relayed=relayed)
+                if judge.enabled():
+                    self._judge_relay(room_id, actor, text, event["seq"], list(relays.values()))
             if held:
                 # 發話的人要知道：訊息記下了，但沒有人被叫醒
                 return dict(event, notice="房間暫停中：這則已記下，但沒有叫醒任何人；使用者在房裡講一句話才恢復。")

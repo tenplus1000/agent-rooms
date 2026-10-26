@@ -43,6 +43,29 @@ class CoreTest(unittest.TestCase):
         self.core.post("s-cx1", other, f"@{self.room} 格式在白板")                 # 直接寫房號也行
         self.assertTrue(any("〔從 標資料" in e.get("text", "") for e in self.drain("s-claude")))
 
+    def test_relay_asks_the_judge_which_rooms_and_logs_the_named_ones(self):
+        # 先只記不用：點名的那幾房是答案，判官看不到 @ 了誰
+        from unittest import mock
+        import json
+        from pathlib import Path
+        other = self.other_room()
+        third = self.core.create_room(USER, "台文", owner="s-cx2")["room_id"]
+        self.core.move(USER, "s-cx2", third)
+        asked = threading.Event()
+        def fake(log_path, state, rooms, meta):
+            fake.args = (state, rooms, meta)
+            asked.set()
+            return None, "skip"
+        with mock.patch.dict(os.environ, {"ROOMS_JUDGE": "on", "ROOMS_JUDGE_KEY": "k"}), \
+                mock.patch("rooms.judge.relay_rooms", side_effect=fake):
+            got = self.core.post("s-claude", self.room, "@codex-1 你們判官的題目怎麼存")
+        self.assertTrue(asked.wait(2))
+        state, rooms, meta = fake.args
+        self.assertEqual(sorted(r for r, _ in rooms), sorted([other, third]))
+        self.assertEqual((meta["room_id"], meta["seq"], meta["chosen"]), (self.room, got["seq"], [other]))
+        self.assertIn("判官的題目怎麼存", state)
+        self.assertNotIn("@codex-1", state)
+
     def test_rewind_only_moves_back_and_only_for_admins(self):
         self.core.ack("s-claude", self.room, 9)
         with self.assertRaises(RoomError):
