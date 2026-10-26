@@ -54,8 +54,10 @@ def state_of(room_name, roles, speaker, text, mentioned=(), context=()):
     return "\n".join(lines)
 
 
-def addressees(log_path, room_name, roles, speaker, text, targets, mentioned=(), context=()):
-    """回 ({名字: 機率}, None)；判官叫不到回 (None, 錯誤)。targets 是要問的成員名字（說話者、被 @ 的除外）。"""
+def addressees(log_path, room_name, roles, speaker, text, targets, mentioned=(), context=(), room_id=None, call=None):
+    """回 ({名字: 機率}, None)；判官叫不到回 (None, 錯誤)。targets 是要問的成員名字（說話者、被 @ 的除外）。
+
+    call 是這一發的編號：同一個編號也寫進那則發言的 judged，紀錄和房間事件靠它對上（房名會改、同一人會連發）。"""
     state = state_of(room_name, roles, speaker, text, mentioned, context)
     questions = {}
     for i, x in enumerate(targets):
@@ -63,7 +65,7 @@ def addressees(log_path, room_name, roles, speaker, text, targets, mentioned=(),
         questions[f"i{i}"] = {"type": "noul", "instructions": IMPACT.format(x=x)}
     model = os.environ.get("ROOMS_JUDGE_MODEL", "").strip() or MODEL
     row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-           "room": room_name, "speaker": speaker, "requested_model": model, "state": state, "questions": questions}
+           "call": call, "room_id": room_id, "room": room_name, "speaker": speaker, "requested_model": model, "state": state, "questions": questions}
     started = time.time()
     probs, error = None, None
     try:

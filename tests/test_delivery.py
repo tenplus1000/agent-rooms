@@ -7,6 +7,7 @@ import threading
 import unittest
 from contextlib import redirect_stdout
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from unittest import mock
 
 from rooms import cli, dispatch
@@ -65,6 +66,16 @@ class WakeTest(unittest.TestCase):
         event, _ = self.judged_post("s-a", "做完了", None, "URLError: timed out")
         self.assertEqual(event["wake"], ["s-boss"])
         self.assertIn("error", event["judged"])
+
+    def test_judge_log_points_back_to_the_post(self):
+        # 判官紀錄和房間發言靠同一個 call 對上：房名會改、同一人會連發，用時間對不準
+        with mock.patch.dict(os.environ, {"ROOMS_JUDGE": "on", "ROOMS_JUDGE_KEY": "k"}), \
+                mock.patch("urllib.request.urlopen", side_effect=OSError("down")):
+            judged = self.core.judge_wake("s-a", self.room, "做完了")
+        event = self.core.post("s-a", self.room, "做完了", judged=judged)
+        rows = [json.loads(l) for l in (Path(self._tmp.name) / "judge.jsonl").read_text().splitlines()]
+        self.assertEqual(rows[-1]["call"], event["judged"]["call"])
+        self.assertEqual(rows[-1]["room_id"], self.room)
 
     def test_user_in_a_room_without_its_owner_reaches_someone(self):
         room = self.core.create_room(USER, "使用者的房")["room_id"]

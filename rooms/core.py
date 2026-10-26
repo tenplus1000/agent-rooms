@@ -18,6 +18,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from rooms import judge
@@ -636,9 +637,10 @@ class Core:
             speaker, room_name = self.name_of(actor), room["name"]
         if not targets:
             return None
+        call = uuid.uuid4().hex[:12]
         probs, error = judge.addressees(str(self.data / "judge.jsonl"), room_name, roles, speaker, text, targets,
-                                        [self.name_of(m) for m in mentioned], context)
-        return {"error": error} if probs is None else {"probs": probs}
+                                        [self.name_of(m) for m in mentioned], context, room_id=room_id, call=call)
+        return {"error": error, "call": call} if probs is None else {"probs": probs, "call": call}
 
     def post(self, actor, room_id, text, judged=None):
         if not text.strip():
