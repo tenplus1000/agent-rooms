@@ -487,6 +487,7 @@ def main(argv=None):
     s.add_argument("--every", action="store_true", help="每個事件都回（預設只在被 @、任務跟你有關時才回，背景一起帶上）")
     s = sub.add_parser("hook", help="給 Claude／Codex 的 hook 用：stdin 讀 hook 的 JSON，有房間訊息就注入")
     sub.add_parser("overview")
+    sub.add_parser("local", help="本機小幫手：房間畫面接 acc、判斷層的建議（綁 127.0.0.1，見 rooms/local.py）")
 
     t = sub.add_parser("task").add_subparsers(dest="action", required=True)
     _add_t = t.add_parser
@@ -507,6 +508,9 @@ def main(argv=None):
     actor = USER if a.as_user else a.session
     if a.cmd == "hook":
         return hook()
+    if a.cmd == "local":
+        from rooms import local
+        return local.serve()
     if not actor and a.cmd not in ("overview",):
         sys.exit("要帶 --session <自己的 session id>，或 --user")
 

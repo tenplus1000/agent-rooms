@@ -1,0 +1,14 @@
+# 本機小幫手的 systemd 使用者服務範本（選配：有裝 acc 或判斷層才有用，見 rooms/local.py）。
+# 安裝：把 ExecStart 改成你的 repo 位置，放到 ~/.config/systemd/user/，然後
+#   systemctl --user daemon-reload && systemctl --user enable --now rooms-local
+[Unit]
+Description=agent-rooms local helper (acc / suggestions for the room page)
+After=default.target
+
+[Service]
+ExecStart=%h/agent-rooms/bin/room local
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

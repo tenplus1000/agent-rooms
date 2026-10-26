@@ -11,6 +11,22 @@ sys.path.insert(0, os.path.join(ROOT, "adapters", "codex_cli"))
 from cli_bridge import WS  # noqa: E402
 
 PORT = 8795
+FAKE_LOCAL = """
+import json
+from rooms import local
+waiting = [{"id": "s1", "title": "這個對話改掛到「甲」？", "reason": "連續 3 個", "evidence": []},
+           {"id": "s2", "title": "這個對話改掛到「乙」？", "reason": "連續 3 個", "evidence": []}]
+local.caps = lambda: {"acc": True, "jl": True}
+local.badges = lambda sids: {s: (len(waiting) if s == "a1" else 0) for s in sids}
+local.session_view = lambda sid: {"acc": {"status": "active", "objective": "我要整理標註", "success_criteria": "全部對過",
+    "project": "/p", "parked": [], "history": [{"status": "achieved", "objective": "我要開房", "note": "開好了"}]},
+    "log": "- 設定 我要整理標註", "super": [], "suggestions": waiting if sid == "a1" else []}
+def decide(d):
+    waiting[:] = [w for w in waiting if w["id"] != d["id"]]
+    return {"id": d["id"], "status": d["choice"] + "ed"}
+local.decide = decide
+local.serve(8797)
+"""
 data = tempfile.mkdtemp(prefix="rooms-ui-")
 OUT = os.path.join(data, "shot")
 print("暫存資料與截圖：", data)
@@ -341,6 +357,23 @@ try:
     check("白板框可以編輯", js("!!document.querySelector('.dialog textarea.board-edit')"))
     js("document.querySelector('.dialog textarea').value = '規矩：先讀再做'; [...document.querySelectorAll('.dialog button')].pop().click()"); time.sleep(1.2)
     check("白板存檔寫回核心", call("GET", "/api/rooms/%s/whiteboard" % r1) == "規矩：先讀再做")
+    # 本機小幫手（acc、判斷層的建議）：假的小幫手，a1 有兩則等決定
+    fake = subprocess.Popen([sys.executable, "-c", FAKE_LOCAL], env=dict(env, ROOMS_LOCAL_ORIGINS=BASE),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1)
+    js("localStorage.setItem('rooms.localUrl', JSON.stringify('http://127.0.0.1:8797')); location.reload()"); time.sleep(3)
+    check("有建議的點掛數字", js("document.querySelector('[data-session=\"a1\"] .abadge-dot text').textContent") == "2")
+    click(*center('[data-session="a1"] circle[fill^="url"]')); time.sleep(0.6)
+    check("點的選單有 acc 鈕", js("[...document.querySelectorAll('.pop button')].some(b => b.textContent.startsWith('acc'))"))
+    js("[...document.querySelectorAll('.pop button')].find(b => b.textContent.startsWith('acc')).click()"); time.sleep(1)
+    check("acc 面板有目前目標與已結案", all(t in (js("document.querySelector('.accp').innerText") or "") for t in ("我要整理標註", "已結案（1）", "等你決定（2）")))
+    widths = js("[...document.querySelectorAll('.accp .pick2')][0] && [...document.querySelectorAll('.accp .pick2')][0].children.length === 2 && [...[...document.querySelectorAll('.accp .pick2')][0].children].map(b => Math.round(b.getBoundingClientRect().width))")
+    check("接受、拒絕一樣大", bool(widths) and widths[0] == widths[1])
+    shot("acc面板")
+    js("[...document.querySelectorAll('.accp .pick2 button')].find(b => b.textContent === '拒絕').click()"); time.sleep(1.5)
+    check("按拒絕送到小幫手、數字變少", js("document.querySelector('[data-session=\"a1\"] .abadge-dot text') && document.querySelector('[data-session=\"a1\"] .abadge-dot text').textContent") == "1")
+    key("Escape"); time.sleep(0.4)
+    fake.terminate()
     shot("結束")
 finally:
     chrome.terminate(); core.terminate()

@@ -17,6 +17,7 @@
 | 轉接器 | `adapters/codex_cli`、`adapters/codex_desktop` | 連到 Codex CLI 的背景服務、Windows 桌面版 Codex |
 | MCP | `adapters/mcp` | 給 Codex 用的房間工具（Codex 的沙盒連不到本機網路） |
 | 判官 | `rooms/judge.py` | 沒 @ 的訊息問決策模型在找誰 |
+| 本機小幫手（選配） | `bin/room local` | 本機有 acc 時，點成員多一個「acc」鈕看它的目標與紀錄；有判斷層時列出等你決定的建議（`rooms/local.py`） |
 
 只用 Python 標準函式庫（桌面版轉接器另用 Windows 端的 Node）。
 
@@ -73,6 +74,8 @@ bin/rooms-dispatch
 ```
 
 要開機就自動跑、掛了自己重開，用 `contrib/rooms-dispatch.service`（systemd 使用者服務，安裝方法寫在檔案開頭）。
+
+本機有裝 acc（或判斷層，設 `ROOMS_JUDGMENT_LAYER`）的話，另外跑 `bin/room local`（或 `contrib/rooms-local.service`）：它綁 `127.0.0.1:8777`，房間畫面直接連，只認 `ROOMS_LOCAL_ORIGINS` 列的頁面來源。沒跑就什麼都不出現，房間照常用。
 
 Codex 的視窗要接在背景服務上，房間才送得進去：用 `codex` 或 `codex resume <id>` 開，不要帶 `-c`／`--enable`／`--disable`／`--search` 這類參數（帶了會改成獨立執行）。
 
