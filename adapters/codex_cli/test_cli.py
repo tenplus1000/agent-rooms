@@ -131,9 +131,15 @@ class AdapterTests(unittest.TestCase):
                 self.execute(daemon, req)
             self.assertFalse(any(c[2] for c in daemon.calls))
 
+    def test_member_model_and_effort_reach_the_turn(self):
+        daemon = FakeDaemon(('idle', 'idle'))
+        self.execute(daemon, request('turn/start', model='gpt-5.6-sol', effort='medium'))
+        sent = [c[1] for c in daemon.calls if c[0] == 'turn/start']
+        self.assertEqual((sent[0]['model'], sent[0]['effort']), ('gpt-5.6-sol', 'medium'))
+
     def test_invalid_input_never_connects(self):
         with patch.object(bridge, 'WS') as ws:
-            for req in [None, {}, request('turn/start', input=[]), request('turn/start', model='override'),
+            for req in [None, {}, request('turn/start', input=[]), request('turn/start', model=3), request('turn/start', effort=''),
                         request('turn/steer', expectedTurnId=3)]:
                 with self.assertRaises(bridge.BridgeError):
                     bridge.execute(req)

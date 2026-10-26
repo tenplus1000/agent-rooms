@@ -206,21 +206,26 @@ def connect():
 def start_thread(params):
     """Open a new daemon-owned thread with no window attached.
 
-    Only cwd is given; model and instructions come from the account's config.
+    cwd is required; model is optional (otherwise it comes from the account's config,
+    and only this thread is affected either way).
     The sandbox is workspace-write, like a window opened in a trusted folder (the daemon
     does not apply folder trust here and would fall back to read-only).
     Approvals are set to never: with no window, nobody could answer a prompt, so a
     command that needs one fails instead of waiting forever.
     """
-    if set(params) - {'cwd'}:
-        raise BridgeError('Unsupported parameters: ' + ', '.join(sorted(set(params) - {'cwd'})))
+    if set(params) - {'cwd', 'model'}:
+        raise BridgeError('Unsupported parameters: ' + ', '.join(sorted(set(params) - {'cwd', 'model'})))
+    if 'model' in params and (not isinstance(params['model'], str) or not params['model'].strip()):
+        raise BridgeError('model must be a non-empty string')
     cwd = params.get('cwd')
     if not isinstance(cwd, str) or not os.path.isabs(cwd) or not os.path.isdir(cwd):
         raise BridgeError('cwd must be an existing absolute directory')
     ws = connect()
     try:
-        got = ws.call('thread/start', {'cwd': cwd, 'approvalPolicy': 'never', 'sandbox': 'workspace-write'},
-                      mutation=True)
+        opening = {'cwd': cwd, 'approvalPolicy': 'never', 'sandbox': 'workspace-write'}
+        if params.get('model'):
+            opening['model'] = params['model']
+        got = ws.call('thread/start', opening, mutation=True)
     finally:
         ws.close()
     return {'threadId': got['thread']['id'], 'cwd': got.get('cwd'), 'model': got.get('model'),
@@ -231,13 +236,19 @@ def execute(request):
     if not isinstance(request, dict):
         raise BridgeError('Request must be a JSON object')
     method = request.get('method')
-    if method not in ('thread/state', 'turn/start', 'turn/steer', 'thread/start'):
+    if method not in ('thread/state', 'turn/start', 'turn/steer', 'thread/start', 'model/list'):
         raise BridgeError('Unsupported bridge method')
     params = request.get('params', {})
     if not isinstance(params, dict):
         raise BridgeError('params must be an object')
     if method == 'thread/start':
         return start_thread(params)
+    if method == 'model/list':
+        ws = connect()
+        try:
+            return ws.call('model/list', {})
+        finally:
+            ws.close()
     thread_id = params.get('threadId')
     if not isinstance(thread_id, str) or not thread_id.strip():
         raise BridgeError('threadId required')
@@ -245,7 +256,10 @@ def execute(request):
     if method != 'thread/state':
         allowed |= {'input', 'clientUserMessageId'}
     if method == 'turn/start':
-        allowed.add('sandbox')
+        allowed |= {'sandbox', 'model', 'effort'}       # 房間開的成員：每一輪照開成員時指定的模型與推理強度
+    for key in ('model', 'effort'):
+        if key in params and (not isinstance(params[key], str) or not params[key].strip()):
+            raise BridgeError(f'{key} must be a non-empty string')
     if params.get('sandbox', 'workspace-write') != 'workspace-write':
         raise BridgeError('sandbox can only be workspace-write')
     if method == 'turn/steer':
@@ -283,6 +297,9 @@ def execute(request):
         outgoing = {'threadId': thread_id, 'input': inputs}
         if 'clientUserMessageId' in params:
             outgoing['clientUserMessageId'] = params['clientUserMessageId']
+        for key in ('model', 'effort'):
+            if key in params:
+                outgoing[key] = params[key]
         if 'sandbox' in params:
             # Threads opened before thread/start set a sandbox were read-only; this turn
             # and the ones after it get workspace-write, with network like a trusted window.

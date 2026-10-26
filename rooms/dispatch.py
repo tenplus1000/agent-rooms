@@ -153,12 +153,38 @@ def account_name(home):
     return NAMES.get(home, os.path.basename(home))
 
 
-def spawn(cwd, account=None):
+CODEX_MEMBERS = os.path.expanduser("~/.local/state/agent-rooms/codex-members")
+
+
+def codex_member(thread_id):
+    """房間開的 Codex 成員指定的模型、推理強度（沒指定就照帳號的 config.toml）。"""
+    try:
+        with open(os.path.join(CODEX_MEMBERS, thread_id + ".json"), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def check_model(home, model, effort):
+    """先問那個帳號有沒有這個模型、支不支援這個推理強度，錯了在開對話前就說。"""
+    got, error = adapter("cli", _sock(home), {"method": "model/list", "params": {}})
+    if error:
+        raise RuntimeError(f"{account_name(home)} 查不到可用的模型：{error}")
+    models = {m.get("model") or m.get("id"): m for m in got.get("data", [])}
+    name = model or next((k for k, m in models.items() if m.get("isDefault")), None)
+    if model and model not in models:
+        raise RuntimeError(f"{account_name(home)} 沒有 {model}（有：{'、'.join(models)}）")
+    efforts = [e.get("reasoningEffort") for e in (models.get(name) or {}).get("supportedReasoningEfforts", [])]
+    if effort and efforts and effort not in efforts:
+        raise RuntimeError(f"{name} 不支援推理 {effort}（可以：{'、'.join(efforts)}）")
+
+
+def spawn(cwd, account=None, model=None, effort=None):
     """在背景服務開一個新的 Codex 對話（沒有視窗）。
 
     account 指定帳號（名字）就只用那個；沒指定就照 ROOMS_SPAWN_ACCOUNTS 的順序挑還有額度的。
-    回 (thread id, 帳號資料夾)；開不成丟 RuntimeError。模型、權限照那個帳號的設定，
-    只有核准改成 never：沒有視窗就沒人能按核准，要核准的指令直接失敗、不會卡住。
+    回 (thread id, 帳號資料夾)；開不成丟 RuntimeError。model／effort 指定了就只套在這個成員（開對話與之後每一輪），
+    不改帳號的 config.toml；沒指定照帳號設定。核准改成 never：沒有視窗就沒人能按核准，要核准的指令直接失敗、不會卡住。
     """
     by_name = {account_name(h): h for h in ACCOUNTS}
     if account:
@@ -172,8 +198,18 @@ def spawn(cwd, account=None):
             raise RuntimeError("Codex 帳號的額度都用完了")
     errors = []
     for home in homes:
-        got, error = adapter("cli", _sock(home), {"method": "thread/start", "params": {"cwd": cwd}})
+        if model or effort:
+            try:
+                check_model(home, model, effort)
+            except RuntimeError as bad:
+                errors.append(str(bad))
+                continue
+        got, error = adapter("cli", _sock(home), {"method": "thread/start", "params": dict(cwd=cwd, **({"model": model} if model else {}))})
         if not error:
+            if model or effort:
+                os.makedirs(CODEX_MEMBERS, exist_ok=True)
+                with open(os.path.join(CODEX_MEMBERS, got["threadId"] + ".json"), "w", encoding="utf-8") as fh:
+                    json.dump({"model": model, "effort": effort}, fh)
             return got["threadId"], home
         errors.append(f"{account_name(home)}：{error}")
     raise RuntimeError("開不了新的 Codex 對話：" + "；".join(errors))
@@ -381,6 +417,9 @@ class Worker(threading.Thread):
         params = {"threadId": self.session, "input": [{"type": "text", "text": text}]}
         if kind == "cli" and method == "turn/start" and (self.headless or {}).get("spawned"):
             params["sandbox"] = "workspace-write"     # 房間開的成員要能寫它的工作資料夾
+        if kind == "cli" and method == "turn/start":
+            chosen = codex_member(self.session)       # 開成員時指定的模型／推理強度，每一輪都帶上
+            params.update({k: v for k, v in chosen.items() if v and k in ("model", "effort")})
         result, error = adapter(kind, sock, {"method": method, "params": params})
         if error and "No message sent" in error:
             log(self.session[:8], "狀態剛好變了，重試", error)

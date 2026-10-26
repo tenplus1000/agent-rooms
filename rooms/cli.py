@@ -148,7 +148,7 @@ def acc_session(session):
 RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
 - 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@{user_id} 找 {user}）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
-- {owner_label}另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的成員（背景跑、不用 {user} 開視窗；帳號是 Claude 帳號時可加 `--model`、`--effort`）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）；`hosts` 看各房的{owner_label}，`say` 裡 @別房{owner_label}的名字（或直接 @房號）會送到他的房間、叫醒他，用來跟別房協調。
+- {owner_label}另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的成員（背景跑、不用 {user} 開視窗；可加 `--model`、`--effort` 只套在這個成員）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）；`hosts` 看各房的{owner_label}，`say` 裡 @別房{owner_label}的名字（或直接 @房號）會送到他的房間、叫醒他，用來跟別房協調。
 - `board` 會一起列出畫面上跟這間接上的房的白板：看得到，只能改自己的。
 - 收到成員或別的對話的回報（交件、做完、卡住），回 {user} 的第一句就講誰回報了什麼，不要混在別的狀態裡。
 - 轉達給不在房裡的對話（例如用 SendMessage）時，附上 {user} 原話的時間和你的 session id，對方才查得到那是 {user} 交代的。
@@ -409,13 +409,13 @@ def spawn(actor, room_id, name, role, text, cwd, account=None, model=None, effor
         sys.exit(f"沒有這個資料夾：{cwd}")
     from rooms import dispatch
     claude = account in dispatch.CLAUDE_NAMES
-    if (model or effort or mode) and not claude:
-        sys.exit("--model／--effort／--permission-mode 目前只給 Claude 成員用（--account 要是 ROOMS_CLAUDE_HOMES 裡的帳號）")
+    if mode and not claude:
+        sys.exit("--permission-mode 只給 Claude 成員用（Codex 成員一律 workspace-write、核准 never）")
     try:
         if claude:
             thread_id, home = dispatch.spawn_claude(os.path.abspath(cwd), account, model, effort, mode)
         else:
-            thread_id, home = dispatch.spawn(os.path.abspath(cwd), account)
+            thread_id, home = dispatch.spawn(os.path.abspath(cwd), account, model, effort)
     except RuntimeError as error:
         sys.exit(f"錯誤：{error}")
     call("POST", "/api/register", session=thread_id, kind="claude" if claude else "codex", name=name, spawned_by=actor)
@@ -476,8 +476,8 @@ def main(argv=None):
     s.add_argument("--cwd", default=None, help="工作資料夾，預設是現在的資料夾")
     s.add_argument("--account", default=None, help="指定帳號：ROOMS_CODEX_HOMES 裡的是 Codex 成員、ROOMS_CLAUDE_HOMES 裡的是 Claude 成員；"
                    "預設照 ROOMS_SPAWN_ACCOUNTS 挑還有額度的 Codex 帳號")
-    s.add_argument("--model", default=None, help="Claude 成員的模型（例如 sonnet、opus 或完整名稱）")
-    s.add_argument("--effort", default=None, choices=["low", "medium", "high", "xhigh", "max"], help="Claude 成員的推理強度")
+    s.add_argument("--model", default=None, help="這個成員的模型（Claude：sonnet、opus 或完整名稱；Codex：例如 gpt-5.6-sol），只套在它身上")
+    s.add_argument("--effort", default=None, help="這個成員的推理強度（low、medium、high、xhigh、max；Codex 有的模型另有 ultra）")
     s.add_argument("--permission-mode", dest="mode", default=None, choices=["auto", "acceptEdits", "bypassPermissions", "dontAsk"],
                    help="Claude 成員的權限模式，預設 auto（沒人能按核准；房間指令一律放行）")
     s = sub.add_parser("role", help="寫成員在做什麼（一句話）：沒 @ 的訊息由判官照這個判在找誰")
