@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from rooms import dispatch
@@ -49,8 +50,24 @@ class ReopenTest(unittest.TestCase):
         rows = [{"type": "permission-mode", "permissionMode": "default"}, {"type": "user", "cwd": "/srv/a"},
                 {"type": "permission-mode", "permissionMode": "auto"}, {"type": "assistant", "cwd": "/srv/b"}]
         (self.home / "projects" / "-work" / "s-1.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
-        self.assertEqual(dispatch.claude_transcript("s-1")[1:], ("/srv/b", "auto"))
+        self.assertEqual(dispatch.claude_transcript("s-1")[1:3], ("/srv/b", "auto"))
         self.assertIsNone(dispatch.claude_transcript("s-9"))
+
+    def test_window_on_another_account_reopens_on_that_account(self):
+        # 額度用完換帳號開的視窗：紀錄在第二個帳號底下，接回時也要用那個帳號
+        import tempfile
+        other = Path(tempfile.mkdtemp())
+        (other / "projects" / "-work").mkdir(parents=True)
+        (other / "projects" / "-work" / "s-2.jsonl").write_text(json.dumps({"type": "user", "cwd": "/srv/c"}))
+        state = Path(tempfile.mkdtemp())
+        with mock.patch.dict(dispatch.CLAUDE_NAMES, {"claude2": str(other)}), \
+                mock.patch.dict(os.environ, {"HOME": str(state)}), \
+                mock.patch.object(dispatch, "CLAUDE_OPEN", "true"), mock.patch("subprocess.Popen"):
+            found = dispatch.claude_transcript("s-2")
+            self.assertEqual(found[3], str(other))
+            dispatch.open_claude("s-2", "x", found[1], found[2], found[3])
+            script = (state / ".local/state/agent-rooms/reopen-s-2.sh").read_text()
+        self.assertIn(f"export CLAUDE_CONFIG_DIR=\"{other}\"", script)
 
 
 if __name__ == "__main__":

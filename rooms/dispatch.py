@@ -476,9 +476,14 @@ def claude_member_hint(session, member):
     return f"CLAUDE_CONFIG_DIR={member['home']} claude --resume {session}（在 {member['cwd']}）"
 
 
+def claude_homes():
+    """這台機器上的 Claude 帳號資料夾：預設的那個加上 ROOMS_CLAUDE_HOMES 列的（視窗可能開在任何一個帳號）。"""
+    return list(dict.fromkeys([CLAUDE_HOME] + list(CLAUDE_NAMES.values())))
+
+
 def claude_alive(session):
-    """有沒有程式開著這個 Claude 對話：~/.claude/sessions/<pid>.json 記著 pid 與對話 id，pid 還在、啟動時間對得上才算。"""
-    for path in glob.glob(os.path.join(CLAUDE_HOME, "sessions", "*.json")):
+    """有沒有程式開著這個 Claude 對話：<帳號>/sessions/<pid>.json 記著 pid 與對話 id，pid 還在、啟動時間對得上才算。"""
+    for path in [p for home in claude_homes() for p in glob.glob(os.path.join(home, "sessions", "*.json"))]:
         try:
             with open(path, encoding="utf-8") as fh:
                 info = json.load(fh)
@@ -503,10 +508,14 @@ def claude_alive(session):
 
 
 def claude_transcript(session):
-    """這台機器上（不是 Windows 桌面版）的對話紀錄：回傳 (紀錄路徑, 工作資料夾, 權限模式)；找不到回 None。"""
-    found = glob.glob(os.path.join(CLAUDE_HOME, "projects", "*", session + ".jsonl"))
+    """這台機器上（不是 Windows 桌面版）的對話紀錄：回傳 (紀錄路徑, 工作資料夾, 權限模式, 帳號資料夾)；找不到回 None。
+    每個帳號都找：額度用完換帳號開的視窗，紀錄在另一個帳號底下；兩邊都有就取最近寫過的那份。"""
+    found = sorted(((p, home) for home in claude_homes()
+                    for p in glob.glob(os.path.join(home, "projects", "*", session + ".jsonl"))),
+                   key=lambda x: os.path.getmtime(x[0]), reverse=True)
     if not found:
         return None
+    found, home = [found[0][0]], found[0][1]
     cwd, mode = None, None
     with open(found[0], encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -519,10 +528,10 @@ def claude_transcript(session):
             if row.get("type") == "permission-mode":
                 mode = row.get("permissionMode") or mode
             cwd = row.get("cwd") or cwd
-    return found[0], cwd or os.path.expanduser("~"), mode
+    return found[0], cwd or os.path.expanduser("~"), mode, home
 
 
-def open_claude(session, name, cwd, mode):
+def open_claude(session, name, cwd, mode, home=None):
     """開一個新視窗接回這個 Claude 對話。成功回 None，不行就回原因。"""
     state = os.path.expanduser("~/.local/state/agent-rooms")
     os.makedirs(state, exist_ok=True)
@@ -531,7 +540,9 @@ def open_claude(session, name, cwd, mode):
     args = [CLAUDE_BIN, "--resume", session] + (["--permission-mode", mode] if mode else []) + [prompt]
     with open(script, "w", encoding="utf-8") as fh:
         fh.write("#!/bin/bash -l\n# 房間轉送程式產生：接回關掉的 Claude 對話\n"
-                 f"cd {json.dumps(cwd)} || cd ~\nexec " + " ".join(json.dumps(a, ensure_ascii=False) for a in args) + "\n")
+                 f"cd {json.dumps(cwd)} || cd ~\n"
+                 + (f"export CLAUDE_CONFIG_DIR={json.dumps(home)}\n" if home and home != CLAUDE_HOME else "")
+                 + "exec " + " ".join(json.dumps(a, ensure_ascii=False) for a in args) + "\n")
     os.chmod(script, 0o700)
     if CLAUDE_OPEN:
         command = CLAUDE_OPEN.format(script=script, title=name)
@@ -608,7 +619,7 @@ class ClaudeWorker(Worker):
                     time.sleep(60)              # 不在這台的紀錄裡（例如 Windows 桌面版）：交給它那邊的 hook
                     continue
                 name = next((a["name"] for a in call("GET", "/api/overview")["agents"] if a["session"] == self.session), self.session[:8])
-                why = open_claude(self.session, name, found[1], found[2])
+                why = open_claude(self.session, name, found[1], found[2], found[3])
                 if why:
                     self.fail("desktop_closed", f"視窗關了，{why}；訊息留著", events)
                     time.sleep(BACKOFF["desktop_closed"])
