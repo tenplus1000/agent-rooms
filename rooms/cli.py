@@ -184,7 +184,8 @@ def hook():
         event_name = payload.get("hook_event_name", "UserPromptSubmit")
         if not session or os.environ.get("ROOMS_DISPATCHED"):
             return                # 轉送程式自己跑的那一輪（背景 Claude 成員）：訊息已經帶在 prompt 裡
-        if event_name == "Stop":
+        if event_name in ("Stop", "SessionStart"):
+            # Stop：每輪做完就等房間；SessionStart：剛開或 resume、還沒跑過任何一輪的對話也要等得到
             return rewake(session)
         full = event_name == "UserPromptSubmit"
         overview = _quick("GET", "/api/overview", {})

@@ -41,5 +41,14 @@ class AutoRegisterTest(unittest.TestCase):
             cli.hook()
         self.assertEqual(called, [])
 
+    def test_session_start_waits_for_the_room_like_stop(self):
+        """剛 resume、還沒跑過一輪的對話：SessionStart 就掛上等待，不用等使用者先打字。"""
+        for event in ("SessionStart", "Stop"):
+            with mock.patch.object(cli, "rewake") as wait, \
+                    mock.patch("sys.stdin", mock.Mock(read=lambda: '{"session_id": "s-1", "hook_event_name": "%s"}' % event)):
+                cli.hook()
+            wait.assert_called_once_with("s-1")
+
+
 if __name__ == "__main__":
     unittest.main()
