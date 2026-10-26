@@ -53,7 +53,12 @@ def jl_dir():
 
 
 def jl(*args):
-    out = subprocess.run([sys.executable, "-m", "jl.suggestions", *args], cwd=jl_dir(),
+    env = dict(os.environ)
+    if acc():
+        # 接受建議時佇列自己叫 acc（找 PATH 上的 acc）；systemd 的 PATH 常常沒有它，把找到的那個補上
+        bin_dir = str(Path(sys.modules["acc"].__file__).resolve().parent.parent / "bin")
+        env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+    out = subprocess.run([sys.executable, "-m", "jl.suggestions", *args], cwd=jl_dir(), env=env,
                          capture_output=True, text=True, timeout=30)
     if out.returncode:
         raise RuntimeError((out.stderr or out.stdout).strip()[-400:] or "判斷層回錯")
