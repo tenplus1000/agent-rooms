@@ -306,7 +306,7 @@ class Worker(threading.Thread):
         self.user_seen = last_seen(session)   # 已經回報過的使用者最後一次在這個對話講話的時間
 
     def note(self, action, detail, light=False, notify=()):
-        log(self.session[:8], action, detail)
+        log(self.session, action, detail)
         try:
             call("POST", "/api/delivery", session=self.session, action=action, detail=detail, light=light,
                  notify=list(notify))
@@ -317,7 +317,7 @@ class Worker(threading.Thread):
         """送不到：亮燈，並在房裡告訴找他的人。同一批只通知一次，之後重試只記紀錄。"""
         key = (action, events[-1]["seq"])
         if self.reported == key:
-            log(self.session[:8], action, "（已通知過）", detail)
+            log(self.session, action, "（已通知過）", detail)
             return
         self.reported = key
         senders = []
@@ -353,7 +353,7 @@ class Worker(threading.Thread):
                 if not self.stop:               # 剛離開房間就不送了
                     self.deliver(room_id, events)
             except Exception as error:
-                log(self.session[:8], "錯誤", error)
+                log(self.session, "錯誤", error)
                 time.sleep(BACKOFF["error"])
 
     def check_user(self):
@@ -422,7 +422,7 @@ class Worker(threading.Thread):
             params.update({k: v for k, v in chosen.items() if v and k in ("model", "effort")})
         result, error = adapter(kind, sock, {"method": method, "params": params})
         if error and "No message sent" in error:
-            log(self.session[:8], "狀態剛好變了，重試", error)
+            log(self.session, "狀態剛好變了，重試", error)
             time.sleep(BACKOFF["race"])
             return
         if error and DETACHED in error:
@@ -618,7 +618,7 @@ class ClaudeWorker(Worker):
                 self.reported = None
                 self.note("reopen", f"視窗關了，開新視窗接回這個對話（{len(events)} 則等著）")
             except Exception as error:
-                log(self.session[:8], "Claude 盯著時出錯", error)
+                log(self.session, "Claude 盯著時出錯", error)
                 time.sleep(BACKOFF["error"])
 
 
@@ -704,7 +704,7 @@ class HeadlessClaudeWorker(Worker):
                     continue
                 self.turn(got["room_id"], got["events"])
             except Exception as error:
-                log(self.session[:8], "Claude 成員出錯", error)
+                log(self.session, "Claude 成員出錯", error)
                 time.sleep(BACKOFF["error"])
 
     def turn(self, room_id, events):
@@ -768,7 +768,7 @@ class HeadlessClaudeWorker(Worker):
                       f"訊息已送過不重送，可用 {claude_member_hint(self.session, member)} 接上看", events)
             return
         self.reported = None
-        log(self.session[:8], "那一輪跑完", f"{result.get('duration_ms', 0) / 1000:.0f} 秒")
+        log(self.session, "那一輪跑完", f"{result.get('duration_ms', 0) / 1000:.0f} 秒")
 
 
 def render_claude(room, session, events):
@@ -864,10 +864,10 @@ def main():
                 workers[session] = (Worker if kind == "codex" else
                                     HeadlessClaudeWorker if claude_member(session) else ClaudeWorker)(session)
                 workers[session].start()
-                log(session[:8], "開始替它監聽")
+                log(session, "開始替它監聽")
             for session in list(workers.keys() - wanted):
                 workers.pop(session).stop = True     # 等這輪長輪詢結束就停
-                log(session[:8], "離開房間，停止監聽")
+                log(session, "離開房間，停止監聽")
         except Exception as error:
             log("核心連不上", error)
         time.sleep(3)
