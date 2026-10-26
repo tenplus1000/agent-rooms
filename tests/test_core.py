@@ -66,6 +66,19 @@ class CoreTest(unittest.TestCase):
         self.assertIn("判官的題目怎麼存", state)
         self.assertNotIn("@codex-1", state)
 
+    def test_host_of_several_rooms_gets_it_where_they_last_spoke(self):
+        # 台文主持開了幾間對唱房、自己人不在任何一間：別房用名字找他，要送到他最近講話的主房，不是最後開的那間
+        main = self.other_room()
+        self.core.post("s-cx1", main, f"@{self.room} 想問你們判官的事")
+        side = self.core.create_room(USER, "對唱一", owner="s-cx1")["room_id"]
+        self.core.move("s-cx1", "s-cx1", side)
+        self.core.move("s-cx1", "s-cx1", None)
+        got = self.core.post("s-claude", self.room, "@codex-1 回你三題")
+        self.assertEqual(got["relayed"], [f"codex-1（{main}）"])
+        self.core.move("s-cx1", "s-cx1", side)                                    # 人坐在哪間就先送那間
+        got = self.core.post("s-claude", self.room, "@codex-1 再補一題")
+        self.assertEqual(got["relayed"], [f"codex-1（{side}）"])
+
     def test_rewind_only_moves_back_and_only_for_admins(self):
         self.core.ack("s-claude", self.room, 9)
         with self.assertRaises(RoomError):

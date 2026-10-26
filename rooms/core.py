@@ -494,11 +494,18 @@ class Core:
         """負責人 @ 了別房的負責人（名字，或直接寫房號）：{對方 session: 對方房號}。"""
         here = set(self._members(room_id))
         owners = {}
+        rank = {}                     # 一個人主持好幾間房時，用名字找他：先送他人在的那間，再來是他最近發言的那間
         for rid, r in self.state["rooms"].items():
             if rid != room_id and not r.get("desk") and r.get("owner") and r["owner"] != USER \
                     and r["owner"] != actor and r["owner"] in self.state["agents"]:
-                owners[self.state["agents"][r["owner"]]["name"]] = (r["owner"], rid)
-                owners.setdefault(rid, (r["owner"], rid))
+                sid = r["owner"]
+                agent = self.state["agents"][sid]
+                spoke = max((e["at"] for e in self.events.get(rid, []) if e["type"] == "post" and e["from"] == sid), default="")
+                key = (agent.get("room_id") == rid, spoke)
+                if agent["name"] not in rank or key > rank[agent["name"]]:
+                    owners[agent["name"]] = (sid, rid)
+                    rank[agent["name"]] = key
+                owners.setdefault(rid, (sid, rid))
         found = {}
         for name in MENTION.findall(text):
             hit = owners.get(name) or owners.get(name.upper())
