@@ -92,18 +92,9 @@ def session_view(sid):
 
 
 def badges(sids):
-    """{session: 等決定的建議數}：Super 建議算在專案上（同專案的每個對話都看得到），判斷層的照對話。"""
+    """{session: 等決定的建議數}：只算這個對話自己的（判斷層的建議）。Super 建議掛在專案上，
+    同專案的每個點都掛同一個數字反而看不出誰有事，所以只在 acc 面板裡列。"""
     counts = {sid: 0 for sid in sids}
-    if acc():
-        goals, _, _ = _goals()
-        per_project = {}
-        for sid in sids:
-            s = goals.load_session(sid)
-            project = (s or {}).get("project")
-            if project:
-                if project not in per_project:
-                    per_project[project] = goals.pending_suggestion_count(project)
-                counts[sid] += per_project[project]
     if jl_dir():
         for x in jl("list"):
             sid = (x.get("subject") or {}).get("session")
