@@ -371,6 +371,31 @@ try:
     shot("附件")
     js("Object.keys(S.wins).forEach(closeWin)"); time.sleep(0.3)
 
+    # 多選：Ctrl＋點加選、Ctrl＋拖框選；選好的可以接在一起、一起刪
+    ra = call("POST", "/api/rooms", name="多選甲")["room_id"]
+    rb = call("POST", "/api/rooms", name="多選乙")["room_id"]
+    call("POST", f"/api/rooms/{ra}/pos", x=1400, y=80); call("POST", f"/api/rooms/{rb}/pos", x=1900, y=80)
+    js("setMulti([])"); time.sleep(2.6); js("fitAll()"); time.sleep(0.6)
+    pa, pb = (js(f"""(() => {{ const b = document.querySelector('#svg [data-room="{x}"] polygon:last-of-type').getBoundingClientRect();
+        return [b.left + b.width / 2, b.top + b.height / 2]; }})()""") for x in (ra, rb))
+    mouse("mousePressed", *pa, 2); mouse("mouseReleased", *pa, 2); time.sleep(0.4)
+    mouse("mousePressed", *pb, 2); mouse("mouseReleased", *pb, 2); time.sleep(0.6)
+    check("Ctrl＋點加選兩間", sorted(js("[...S.multi]") or []) == sorted([ra, rb]))
+    js("setMulti([])"); time.sleep(0.4)
+    # 從兩間房外圍的空白處框（起點要落在空白的舞台上，不能點在房間或上方工具列）
+    lo = (min(pa[0], pb[0]) - 60, max(60, min(pa[1], pb[1]) - 60)); hi = (max(pa[0], pb[0]) + 60, max(pa[1], pb[1]) + 60)
+    drag(lo, hi, 2); time.sleep(0.6)
+    check("Ctrl＋拖框選", {ra, rb} <= set(js("[...S.multi]") or []))
+    js(f"setMulti(['{ra}', '{rb}'])"); time.sleep(0.4)
+    shot("多選")
+    js("[...document.querySelectorAll('#roombar button')].find(b => b.textContent === '接在一起').click()"); time.sleep(2.5)
+    check("接在一起就共用白板", rb in (call("GET", f"/api/rooms/{ra}/neighbors") and [n["room_id"] for n in call("GET", f"/api/rooms/{ra}/neighbors")]))
+    js(f"setMulti(['{ra}', '{rb}'])"); time.sleep(0.4)
+    js("[...document.querySelectorAll('#roombar button')].find(b => b.textContent === '刪除').click()"); time.sleep(0.6)
+    js("[...document.querySelectorAll('.dialog button')].find(b => b.textContent === '刪除').click()"); time.sleep(2)
+    left = {r["room_id"] for r in call("GET", "/api/overview")["rooms"]}
+    check("一起刪掉", ra not in left and rb not in left)
+
     # 本機工具：右側小球，點兩下開窄窗，拖到房間上就接上
     kit = call("POST", "/api/tools", name="測試儀表板", category="dashboard", url=BASE + "/")
     time.sleep(3)

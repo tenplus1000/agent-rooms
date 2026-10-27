@@ -160,7 +160,9 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 .pop .name { font-weight: 600; }
 .pop .sub { color: var(--dim); font-size: 12px; margin: 2px 0 8px; }
 .pop .acts { display: flex; flex-wrap: wrap; gap: 6px; }
-#roombar { position: fixed; z-index: 15; display: none; gap: 6px; }
+#roombar { position: fixed; z-index: 15; display: none; gap: 6px; align-items: center; }
+#roombar .cnt { color: var(--dim); font-size: 12px; margin-right: 2px; }
+#marquee { position: fixed; z-index: 14; border: 1px dashed var(--accent); background: rgba(108,182,255,0.08); pointer-events: none; display: none; }
 #suggest { position: fixed; bottom: 92px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; z-index: 25;
   display: none; max-height: 320px; overflow: auto; min-width: 260px; }
 #suggest div { padding: 5px 10px; cursor: pointer; }
@@ -188,6 +190,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 </div>
 <div id="stage"><div id="world"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg><div id="overlay"></div></div></div>
 <div id="roombar"></div>
+<div id="marquee"></div>
 <div id="tooldock"></div>
 <div id="toolpane"></div>
 <div id="bar">
@@ -249,6 +252,7 @@ function setupView() {
   stage.addEventListener("pointerdown", e => {
     const bg = e.target === stage || e.target === $("svg") || e.target === $("world");
     if (!bg || (e.button !== 0 && e.button !== 1)) return;
+    if (e.button === 0 && (e.ctrlKey || e.metaKey)) return startMarquee(e);          // Ctrl＋拖：框選房間
     if (e.button === 1) e.preventDefault();
     pts[e.pointerId] = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY };
     rebase();
@@ -774,7 +778,7 @@ function dragWin(win) {
 
 // ── 選房間、房間的操作 ───────────────────────────
 function selectRoom(id) { S.multi.clear(); S.sel = S.sel === id ? null : id; if (S.sel) S.mode = null; render(); }
-S.multi = new Set();                                   // Shift＋左鍵選的房間，拖其中一間就一起搬
+S.multi = new Set();                                   // Ctrl（或 Shift）＋左鍵、Ctrl＋拖框選的房間，拖其中一間就一起搬
 function toggleMulti(id) {
   if (!S.multi.size && S.sel) S.multi.add(S.sel);
   S.multi.has(id) ? S.multi.delete(id) : S.multi.add(id);
@@ -794,6 +798,19 @@ function placeRoombar() {
       const id = await deskRoom(S.mode); hiddenSeq[id] = 0; store.set("hidden", hiddenSeq); openWin(id); } } }));
     return;
   }
+  if (S.multi.size > 1) {                          // 選了好幾間：放在這幾間底下，一起接上或刪掉
+    const boxes = [...S.multi].map(id => document.querySelector(`#svg [data-room="${id}"]`)).filter(Boolean).map(g => g.getBoundingClientRect());
+    if (!boxes.length) { bar.style.display = "none"; return; }
+    const left = Math.min(...boxes.map(b => b.left)), right = Math.max(...boxes.map(b => b.right)), bottom = Math.max(...boxes.map(b => b.bottom));
+    bar.style.left = Math.max(8, Math.min((left + right) / 2 - 140, innerWidth - 300)) + "px";
+    bar.style.top = Math.min(bottom + 8, innerHeight - 150) + "px";
+    bar.style.display = "flex";
+    bar.append(el("span", { class: "cnt", text: `選了 ${S.multi.size} 間` }),
+      el("button", { text: "接在一起", title: "排成一列、相鄰的共用白板", on: { click: () => joinRooms(S.multi) } }),
+      el("button", { text: "取消選取", on: { click: () => setMulti([]) } }),
+      el("button", { class: "danger", text: "刪除", on: { click: () => deleteRooms(S.multi) } }));
+    return;
+  }
   const r = S.sel && S.ov.rooms.find(x => x.room_id === S.sel);
   if (!r) { bar.style.display = "none"; return; }
   const g = document.querySelector(`[data-room="${r.room_id}"]`);
@@ -804,6 +821,8 @@ function placeRoombar() {
   bar.style.display = "flex";
   bar.append(el("button", { text: "看對話", on: { click: () => { hiddenSeq[r.room_id] = 0; store.set("hidden", hiddenSeq); openWin(r.room_id); } } }));
   bar.append(el("button", { text: "改名", on: { click: () => renameRoom(r) } }));
+  if (Object.keys(r.neighbors || {}).length)
+    bar.append(el("button", { text: "連同相連的", title: "把接在一起的房一起選起來（可以一起拖）", on: { click: () => setMulti(cluster(r.room_id)) } }));
   if (r.paused) bar.append(el("button", { text: "解除暫停", on: { click: () => act(api("POST", `/api/rooms/${r.room_id}/resume`), "解除暫停了") } }));
   bar.append(el("button", { class: "danger", text: "刪除", on: { click: () => deleteRoom(r) } }));
 }
@@ -852,11 +871,76 @@ async function offerCleanup(only) {
 async function act(promise, ok) { try { await promise; toast(ok); } catch (e) { toast(e.message); } refresh(); }
 
 // ── 拖拉：搬房間、換房、換負責人 ───────────────────
+function startMarquee(e) {
+  e.preventDefault();
+  const box = $("marquee"), sx = e.clientX, sy = e.clientY;
+  const before = new Set(S.multi.size ? S.multi : S.sel ? [S.sel] : []);
+  let rect = null;
+  const move = ev => {
+    const x = Math.min(sx, ev.clientX), y = Math.min(sy, ev.clientY), w = Math.abs(ev.clientX - sx), h = Math.abs(ev.clientY - sy);
+    rect = { x, y, w, h };
+    Object.assign(box.style, { display: "block", left: x + "px", top: y + "px", width: w + "px", height: h + "px" });
+  };
+  const up = () => {
+    removeEventListener("pointermove", move); removeEventListener("pointerup", up);
+    box.style.display = "none";
+    if (!rect || rect.w + rect.h < 8) return;
+    // 房間的範圍跟框有交疊就算選到（Ctrl 框選是加進去，原本選的保留）
+    for (const g of document.querySelectorAll("#svg [data-room]")) {
+      const b = g.getBoundingClientRect();
+      if (b.right > rect.x && b.left < rect.x + rect.w && b.bottom > rect.y && b.top < rect.y + rect.h) before.add(g.getAttribute("data-room"));
+    }
+    setMulti(before);
+  };
+  addEventListener("pointermove", move); addEventListener("pointerup", up);
+}
+function setMulti(ids) {
+  S.multi = new Set(ids);
+  S.sel = S.multi.size === 1 ? [...S.multi][0] : null;
+  if (S.multi.size <= 1) S.multi.clear();
+  S.mode = null; render();
+}
+function cluster(id) {                       // 跟這間相連（共用白板）的整串房
+  const seen = new Set([id]), todo = [id];
+  while (todo.length) {
+    const r = S.ov.rooms.find(x => x.room_id === todo.pop());
+    for (const n of Object.keys((r && r.neighbors) || {})) if (!seen.has(n)) { seen.add(n); todo.push(n); }
+  }
+  return seen;
+}
+async function joinRooms(ids) {
+  // 接在一起：照現在由左到右的順序，一間接一間排成一列（每間接在前一間的右下那面），接上的就共用白板
+  const list = rooms();
+  const pos = id => roomPos(list.find(x => x.room_id === id), list.findIndex(x => x.room_id === id));
+  const order = [...ids].sort((a, b) => pos(a)[0] - pos(b)[0]);
+  let [x, y] = pos(order[0]);
+  try {
+    for (const id of order.slice(1)) {
+      x += SIDES[0][0]; y += SIDES[0][1];
+      S.pendingPos[id] = [x, y];
+      await api("POST", `/api/rooms/${id}/pos`, { x, y });
+    }
+    toast(`${order.length} 間接在一起了`);
+  } catch (err) { toast(err.message); }
+  refresh();
+}
+async function deleteRooms(ids) {
+  const list = [...ids].map(id => S.ov.rooms.find(r => r.room_id === id)).filter(Boolean);
+  const empty = list.filter(r => !r.members.length), busy = list.filter(r => r.members.length);
+  if (!empty.length) return toast(`選的房裡都還有人（${busy.map(r => r.room_id).join("、")}），先把點拖出去再刪`);
+  const yes = await dialog({ title: `刪掉 ${empty.length} 間房？`, danger: true, ok: "刪除",
+    text: `${empty.map(r => `${r.name}（${r.room_id}）`).join("、")}\n房間會消失，紀錄封存在 data/rooms/deleted/。` +
+      (busy.length ? `\n${busy.map(r => r.room_id).join("、")} 裡還有人，這次不刪。` : ""), pre: true });
+  if (!yes) return;
+  for (const r of empty) { try { await api("POST", `/api/rooms/${r.room_id}/delete`); S.multi.delete(r.room_id); } catch (err) { toast(err.message); } }
+  setMulti(S.multi); toast(`刪掉 ${empty.length} 間`); refresh();
+}
 function startRoomDrag(e, r) {
   e.preventDefault();
   const had = S.multi.has(r.room_id);
-  if (e.shiftKey && !had) toggleMulti(r.room_id);                      // Shift 點到沒選的：先加進來，可以直接拖整組
-  const sx = e.clientX, sy = e.clientY, shift = e.shiftKey; let moved = false, dx = 0, dy = 0, frame = 0;
+  const addKey = e.shiftKey || e.ctrlKey || e.metaKey;                  // Ctrl（或 Shift）點：加選／取消
+  if (addKey && !had) toggleMulti(r.room_id);                           // 點到沒選的：先加進來，可以直接拖整組
+  const sx = e.clientX, sy = e.clientY, shift = addKey; let moved = false, dx = 0, dy = 0, frame = 0;
   const list = rooms();
   const ids = S.multi.has(r.room_id) ? [...S.multi] : [r.room_id];
   const group = ids.map(id => list.find(x => x.room_id === id)).filter(Boolean).map(x => {
