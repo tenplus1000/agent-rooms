@@ -224,6 +224,19 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(texts, ["第一則"])
         self.assertEqual(self.core.history("s-cx1", self.room)[0]["type"], "room_created")
 
+    def test_assignment_is_not_buried_under_a_long_backlog(self):
+        # 房裡已經幾百則才進來：派工那則一定在第一批，舊的換成一則「還有幾則」，之後不再一批批補送
+        for k in range(30):
+            self.core.post("s-claude", self.room, f"舊訊息 {k}")
+        self.core.move("s-cx1", "s-cx1", self.room)
+        self.core.post("s-claude", self.room, "@codex-1 你的指派")
+        got = self.core.listen("s-cx1", wait=0, limit=10)["events"]
+        self.assertLessEqual(len(got), 10)
+        self.assertEqual(got[0]["type"], "backlog")
+        self.assertTrue(any(e.get("text") == "@codex-1 你的指派" for e in got))
+        self.assertEqual(self.core.listen("s-cx1", wait=0)["events"], [])
+        self.assertEqual(len([e for e in self.core.history("s-cx1", self.room) if e["type"] == "post"]), 31)   # 照樣看得到全部
+
     # ── 訊息與線頭 ─────────────────────────────────────
 
     def test_mention_opens_thread_and_their_post_closes_it(self):

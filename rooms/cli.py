@@ -88,6 +88,9 @@ def line_for(event, room_name):
         room_name = room_name.get(event["room_id"], event["room_id"])
     head = f"【房間 {room_name}（{event['room_id']}）｜來自 {event['from_name']}】"
     kind = event["type"]
+    if kind == "backlog":
+        return head + (f"在這之前還有 {event['count']} 則較早的紀錄沒有放進來（都看得到）："
+                       f"要看用 read --since {event['since']}（Codex 用 room_read，since={event['since']}）")
     if kind == "post":
         return head + event["text"] + "".join(f"\n〔附件〕{f.get('name')}：{file_path(f['rel'])}" for f in event.get("files") or [])
     if kind == "task":

@@ -1087,6 +1087,24 @@ class Core:
         return room_id, rows
 
     @staticmethod
+    def _fit(session, rows, limit):
+        """一次送不完時（例如剛進房、房裡已經有幾百則）：找他的事件一定送，其餘留最新的，
+        前面省略的換成一則「還有幾則較早的紀錄」。依時間順序切會把派工埋在後面幾批，他回完第一批就說沒看到指派。
+        省略的照樣看得到（read），游標照樣推到最後：不會一批一批補送舊的。"""
+        if len(rows) <= limit:
+            return rows
+        keep = {e["seq"] for e in rows if session in e.get("wake", ())}
+        for e in reversed(rows):
+            if len(keep) >= limit - 1:
+                break
+            keep.add(e["seq"])
+        kept = [e for e in rows if e["seq"] in keep]
+        first = rows[0]
+        note = {"type": "backlog", "room_id": first["room_id"], "seq": first["seq"], "at": first["at"], "from": "",
+                "from_name": "房間", "count": len(rows) - len(kept), "since": first["seq"] - 1}
+        return [note] + kept
+
+    @staticmethod
     def _advance(agent, rows):
         for e in rows:
             agent["cursor"][e["room_id"]] = max(agent["cursor"].get(e["room_id"], 0), e["seq"])
@@ -1112,9 +1130,9 @@ class Core:
                 ready = rows and (not triggers_only or (not agent.get("off")
                                                         and any(session in e.get("wake", ()) for e in rows)))
                 if ready:
-                    rows = rows[:limit]
                     if consume:
-                        self._advance(agent, rows)
+                        self._advance(agent, rows[:limit] if len(rows) <= limit else rows)
+                    rows = self._fit(session, rows, limit)
                     self._save()
                     return {"room_id": room_id, "dnd": agent["dnd"], "off": agent.get("off"),
                             "headless": agent.get("headless"), "events": rows}
