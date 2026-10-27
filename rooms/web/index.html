@@ -1431,9 +1431,17 @@ async function refresh() {
 $("newRoom").addEventListener("click", newRoom);
 $("clip").addEventListener("click", () => $("filepick").click());
 $("filepick").addEventListener("change", e => { addFiles([...e.target.files]); e.target.value = ""; });
-$("input").addEventListener("paste", e => {
-  const files = [...(e.clipboardData || {}).items || []].filter(i => i.kind === "file").map(i => i.getAsFile());
-  if (files.length) { e.preventDefault(); addFiles(files); }
+// 貼上截圖：游標不在輸入框也收（例如剛點過房間或對話視窗）；別的輸入框（白板、搜尋）裡貼的不攔
+document.addEventListener("paste", e => {
+  const cd = e.clipboardData;
+  if (!cd) return;
+  const other = e.target.closest && e.target.closest("input, textarea, [contenteditable]");
+  if (other && other.id !== "input") return;
+  let files = [...(cd.items || [])].filter(i => i.kind === "file").map(i => i.getAsFile()).filter(Boolean);
+  if (!files.length) files = [...(cd.files || [])];
+  if (!files.length) return;
+  e.preventDefault(); addFiles(files); $("input").focus();
+  toast(`附上 ${files.length} 個檔案，打字後按送出`);
 });
 $("bar").addEventListener("dragover", e => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); $("bar").classList.add("drop"); } });
 $("bar").addEventListener("dragleave", () => $("bar").classList.remove("drop"));
