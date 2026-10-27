@@ -729,7 +729,10 @@ class Core:
             members = self._members(room_id)
             mentioned = [m for m in self._resolve_mentions(room_id, text) if m in members]
             roles = [(self.name_of(sid), self._role_line(sid, room)) for sid in members]
-            targets = [self.name_of(sid) for sid in members if sid != actor and sid not in mentioned]
+            named = [self.name_of(m) for m in mentioned]
+            # 名字是被 @ 那人名字開頭的（@評分員D 裡看得到「評分員」）：判官分不清，常誤判成在叫他，這種不問
+            targets = [self.name_of(sid) for sid in members if sid != actor and sid not in mentioned
+                       and not any(n != self.name_of(sid) and n.startswith(self.name_of(sid)) for n in named)]
             posts = [e for e in self.events.get(room_id, []) if e["type"] == "post"][-JUDGE_CONTEXT:]
             context = [(e["from_name"], e["text"][:200]) for e in posts]
             speaker, room_name = self.name_of(actor), room["name"]

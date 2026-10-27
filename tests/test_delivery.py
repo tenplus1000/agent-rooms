@@ -67,6 +67,14 @@ class WakeTest(unittest.TestCase):
         self.assertEqual(event["wake"], ["s-boss"])
         self.assertIn("error", event["judged"])
 
+    def test_judge_skips_a_name_that_prefixes_the_one_mentioned(self):
+        # @評分員D 裡看得到「評分員」：判官會誤以為在叫評分員，這種直接不問
+        self.core.register("s-d", "codex", "aD")
+        self.core.move("s-d", "s-d", self.room)
+        event, ask = self.judged_post("s-boss", "@aD 照說明評分", {"b": 0.1})
+        self.assertNotIn("a", ask.call_args[0][5])
+        self.assertIn("b", ask.call_args[0][5])
+
     def test_judge_log_points_back_to_the_post(self):
         # 判官紀錄和房間發言靠同一個 call 對上：房名會改、同一人會連發，用時間對不準
         with mock.patch.dict(os.environ, {"ROOMS_JUDGE": "on", "ROOMS_JUDGE_KEY": "k"}), \
