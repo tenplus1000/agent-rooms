@@ -47,5 +47,21 @@ class CodexMemberTest(unittest.TestCase):
         self.assertEqual(dispatch.codex_member(thread), {})
 
 
+
+class DaemonStartTest(unittest.TestCase):
+    def test_missing_socket_starts_that_accounts_daemon_once(self):
+        # 電腦重開後 /tmp 的 socket 沒了：替那個帳號開背景服務，一分鐘內不重複開
+        import tempfile
+        from unittest import mock
+        from rooms import dispatch
+        home = tempfile.mkdtemp()
+        with mock.patch.dict(dispatch._daemon_tried, clear=True), \
+                mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout="{}", stderr="")) as run:
+            dispatch._sock(home)
+            dispatch._sock(home)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.kwargs["env"]["CODEX_HOME"], home)
+        self.assertEqual(run.call_args.args[0][1:], ["app-server", "daemon", "start"])
+
 if __name__ == "__main__":
     unittest.main()

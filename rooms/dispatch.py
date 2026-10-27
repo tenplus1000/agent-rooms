@@ -109,7 +109,32 @@ def _found(root, thread_id):
 
 
 def _sock(home):
-    return os.path.join(home, "app-server-control", "app-server-control.sock")
+    path = os.path.join(home, "app-server-control", "app-server-control.sock")
+    if not os.path.exists(path):
+        _start_daemon(home)
+    return path
+
+
+_daemon_tried = {}
+_daemon_lock = threading.Lock()
+
+
+def _start_daemon(home):
+    """背景服務的 socket 在 /tmp，電腦重開就沒了；沒人開過 codex 之前誰都送不進去。看到不在就替那個帳號開起來（一分鐘最多試一次）。"""
+    with _daemon_lock:
+        if time.time() - _daemon_tried.get(home, 0) < 60:
+            return
+        _daemon_tried[home] = time.time()
+    try:
+        # 先用那個帳號自己裝好的 codex（原生執行檔，不靠 node／PATH）；沒有才找 PATH 上的
+        managed = os.path.join(home, "packages", "app-server-daemon", "current", "bin", "codex")
+        exe = os.environ.get("ROOMS_CODEX_BIN", "").strip() or (managed if os.path.exists(managed) else "codex")
+        out = subprocess.run([exe, "app-server", "daemon", "start"], env=dict(os.environ, CODEX_HOME=home),
+                             capture_output=True, text=True, timeout=90)
+        log(account_name(home), "背景服務不在，開起來了" if out.returncode == 0 else "背景服務開不起來",
+            (out.stdout or out.stderr).strip().splitlines()[-1:] if (out.stdout or out.stderr) else "")
+    except Exception as error:
+        log(account_name(home), "背景服務開不起來", error)
 
 
 def _has_quota(home):
