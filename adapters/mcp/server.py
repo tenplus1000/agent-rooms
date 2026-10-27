@@ -160,6 +160,14 @@ def invoke(name, arguments):
     if name in ('room_moves', 'room_dnd'):
         method, path = ('GET', '/api/moves') if name == 'room_moves' else ('POST', '/api/dnd')
         return http(method, path, session=session, **params, **actor)
+    if name == 'room_read':
+        room_id = current_room(session, params.pop('room_id', None))
+        rows = http('GET', '/api/rooms/' + urllib.parse.quote(room_id, safe='') + '/history', **params, **actor)
+        from rooms.cli import file_path
+        for row in rows:                       # 附件換成這台機器上的路徑，Codex 直接讀檔
+            for f in row.get('files') or []:
+                f['path'] = file_path(f['rel'])
+        return rows
     if name in ROOM_ROUTES:
         room_id = current_room(session, params.pop('room_id', None))
         method, suffix = ROOM_ROUTES[name]

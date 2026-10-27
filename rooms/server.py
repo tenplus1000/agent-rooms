@@ -141,6 +141,9 @@ def make_handler(core, remote=False):
                                             a.get("light") in (True, "1", "true", 1), a.get("notify") or ())
             if method == "GET" and path == "/api/deliveries":
                 return core.deliveries(int(a.get("limit", 200)))
+            if method == "GET" and path.startswith("/api/files/"):
+                from urllib.parse import unquote
+                return core.read_file(actor, unquote(path[len("/api/files/"):]))
             if path == "/api/tools":
                 if method == "POST":
                     return core.set_tool(actor, a)
@@ -183,7 +186,10 @@ def make_handler(core, remote=False):
                     return core.neighbor_boards(actor, room_id)
                 if sub == "post" and method == "POST":
                     text = a.get("text", "")
-                    return core.post(actor, room_id, text, judged=core.judge_wake(actor, room_id, text))
+                    judged = core.judge_wake(actor, room_id, text) if text.strip() else None
+                    return core.post(actor, room_id, text, judged=judged, files=a.get("files"))
+                if sub == "upload" and method == "POST":
+                    return core.save_file(actor, room_id, a.get("name", ""), a.get("data", ""))
                 if sub == "threads":
                     return core.threads(actor, room_id, open_only=a.get("all") not in ("1", "true", True))
                 if sub == "tasks":

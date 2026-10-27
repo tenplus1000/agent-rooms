@@ -96,6 +96,21 @@ class CoreTest(unittest.TestCase):
         self.core.delete_tool(USER, kit["id"])
         self.assertEqual(self.core.room_tools("s-claude", self.room), [])
 
+    def test_posts_carry_files_only_people_in_the_room_can_read(self):
+        import base64
+        got = self.core.save_file("s-claude", self.room, "截圖.png", base64.b64encode(b"\x89PNG fake").decode())
+        self.assertTrue(got["rel"].startswith(self.room + "/") and got["type"] == "image/png")
+        event = self.core.post("s-claude", self.room, "", files=[got])          # 只有附件、沒有字也可以
+        self.assertEqual(event["files"][0]["name"], "截圖.png")
+        self.assertEqual(self.core.read_file(USER, got["rel"])[0], b"\x89PNG fake")
+        other = self.other_room()
+        with self.assertRaises(RoomError):
+            self.core.read_file("s-cx1", got["rel"])                            # 別間房的人拿不到
+        with self.assertRaises(RoomError):
+            self.core.post("s-cx1", other, "偷用", files=[got])                  # 也不能拿去別間房附
+        with self.assertRaises(RoomError):
+            self.core.read_file(USER, f"{self.room}/../../state.json")
+
     def test_rewind_only_moves_back_and_only_for_admins(self):
         self.core.ack("s-claude", self.room, 9)
         with self.assertRaises(RoomError):

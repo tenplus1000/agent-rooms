@@ -358,6 +358,19 @@ try:
     check("白板框可以編輯", js("!!document.querySelector('.dialog textarea.board-edit')"))
     js("document.querySelector('.dialog textarea').value = '規矩：先讀再做'; [...document.querySelectorAll('.dialog button')].pop().click()"); time.sleep(1.2)
     check("白板存檔寫回核心", call("GET", "/api/rooms/%s/whiteboard" % r1) == "規矩：先讀再做")
+    # 附件：貼上的截圖跟訊息一起送，對話視窗裡看得到縮圖
+    js(f"S.sel = '{r1}'; S.mode = null; render()")
+    js("addFiles([new File([Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='), c => c.charCodeAt(0))], 'image.png', {type: 'image/png'})])")
+    time.sleep(0.4)
+    check("貼上的截圖先列在輸入框上方", js("document.querySelectorAll('#attach .chip img').length") == 1)
+    js("document.getElementById('input').value = '看這張'; send()"); time.sleep(2)
+    hist = call("GET", f"/api/rooms/{r1}/history")
+    check("截圖跟訊息一起送出", any(e.get("files") and e.get("text") == "看這張" for e in hist))
+    js(f"openWin('{r1}')"); time.sleep(1.5)
+    check("對話視窗裡有縮圖", js("(() => { const i = document.querySelector('.win .msg .att img'); return !!i && i.complete && i.naturalWidth > 0; })()"))
+    shot("附件")
+    js("Object.keys(S.wins).forEach(closeWin)"); time.sleep(0.3)
+
     # 本機工具：右側小球，點兩下開窄窗，拖到房間上就接上
     kit = call("POST", "/api/tools", name="測試儀表板", category="dashboard", url=BASE + "/")
     time.sleep(3)

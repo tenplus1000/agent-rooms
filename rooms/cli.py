@@ -75,6 +75,13 @@ def agent_of(name_or_session):
     return name_or_session
 
 
+def file_path(rel):
+    """附件在這台機器上的位置（核心把檔案存在資料夾的 files/ 底下；資料夾預設是 repo 的 data/）。"""
+    root = os.environ.get("ROOMS_DATA_DIR", "").strip() or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+    return os.path.join(os.path.abspath(root), "files", rel)
+
+
 def line_for(event, room_name):
     """room_name 可以是一個名字，或 {房號: 名字}（維修一次收到好幾間房的事件）。"""
     if isinstance(room_name, dict):
@@ -82,7 +89,7 @@ def line_for(event, room_name):
     head = f"【房間 {room_name}（{event['room_id']}）｜來自 {event['from_name']}】"
     kind = event["type"]
     if kind == "post":
-        return head + event["text"]
+        return head + event["text"] + "".join(f"\n〔附件〕{f.get('name')}：{file_path(f['rel'])}" for f in event.get("files") or [])
     if kind == "task":
         note = f"：{event['note']}" if event.get("note") else ""
         return head + f"任務 {event['task_id']} {event['action']}（{event['status']}）{event['objective']}{note}"
@@ -153,7 +160,7 @@ def acc_session(session):
 
 RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
-- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@{user_id} 找 {user}）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。
+- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@{user_id} 找 {user}）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。訊息裡的〔附件〕是檔案在這台機器上的路徑，直接讀；要附檔用 `say \"...\" --file <路徑>`。
 - {owner_label}另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的成員（背景跑、不用 {user} 開視窗；可加 `--model`、`--effort` 只套在這個成員）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）；`hosts` 看各房的{owner_label}，`say` 裡 @別房{owner_label}的名字（或直接 @房號）會送到他的房間、叫醒他，用來跟別房協調。
 - `board` 會一起列出畫面上跟這間接上的房的白板：看得到，只能改自己的。
 - `tools` 看這間房接上的本機工具（網址、repo、怎麼啟動、`tools --map <代號>` 印程式圖）；{user} 說「房間接的那個」就是指這些。
@@ -178,7 +185,7 @@ RESIDENT_RULES = """你是 {user} 的常駐代理，在房間工具裡是全域�
 
 CODEX_RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
-- 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@{user_id} 找 {user}）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板（`room_neighbor_boards` 看畫面上接上的房的白板，只能看）、`room_tools` 看這間房接上的本機工具（{user} 說「房間接的那個」就是指這些，`room_tool_map` 看它的程式圖）、`room_hosts` 看各房{owner_label}（{owner_label}在 `room_say` 裡 @別房{owner_label}會送到他的房間）、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。
+- 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@{user_id} 找 {user}）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板（`room_neighbor_boards` 看畫面上接上的房的白板，只能看）、`room_tools` 看這間房接上的本機工具（{user} 說「房間接的那個」就是指這些，`room_tool_map` 看它的程式圖）、`room_hosts` 看各房{owner_label}（{owner_label}在 `room_say` 裡 @別房{owner_label}會送到他的房間）、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。`room_read` 讀到的訊息有 files 時，裡面的 path 是附件在這台機器上的位置，直接讀。
 {maintainer_line}- 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
 
@@ -469,7 +476,8 @@ def main(argv=None):
     sub.add_parser("rooms")
     sub.add_parser("who")
     s = sub.add_parser("read"); s.add_argument("--since", type=int, default=0); s.add_argument("--limit", type=int, default=200)
-    s = sub.add_parser("say"); s.add_argument("text")
+    s = sub.add_parser("say"); s.add_argument("text", nargs="?", default="")
+    s.add_argument("--file", action="append", metavar="PATH", help="附檔案（圖片、任何檔，可以重複）")
     s = sub.add_parser("board"); s.add_argument("--set", metavar="FILE", help="用檔案內容取代白板（- 是 stdin）")
     s = sub.add_parser("tools", help="這間房接上的本機工具：網址、repo、怎麼啟動、程式圖（--map 工具代號 印出那個 repo 的程式圖）")
     s.add_argument("--map", metavar="ID")
@@ -615,7 +623,13 @@ def main(argv=None):
             print(f"#{event['seq']} {local_time(event['at'], '%Y-%m-%d %H:%M:%S %Z')} " + line_for(event, name))
         return
     if a.cmd == "say":
-        return show(call("POST", f"/api/rooms/{room}/post", actor, text=a.text))
+        import base64
+        files = []
+        for path in a.file or []:
+            with open(path, "rb") as fh:
+                files.append(call("POST", f"/api/rooms/{room}/upload", actor, name=os.path.basename(path),
+                                  data=base64.b64encode(fh.read()).decode()))
+        return show(call("POST", f"/api/rooms/{room}/post", actor, text=a.text, files=files or None))
     if a.cmd == "board":
         if a.set:
             text = sys.stdin.read() if a.set == "-" else open(a.set, encoding="utf-8").read()

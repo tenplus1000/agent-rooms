@@ -740,8 +740,53 @@ class Core:
                                         [self.name_of(m) for m in mentioned], context, room_id=room_id, call=call)
         return {"error": error, "call": call} if probs is None else {"probs": probs, "call": call}
 
-    def post(self, actor, room_id, text, judged=None):
-        if not text.strip():
+    # ── 附件：對話框貼的截圖、拖進來的檔案。存在 <data>/files/<房號>/，看得到那間房的人才拿得到 ──
+
+    FILE_LIMIT = 25 * 1024 * 1024
+
+    def save_file(self, actor, room_id, name, data_b64):
+        import base64
+        import secrets
+        with self.cond:
+            self._require_see(actor, room_id)
+        try:
+            raw = base64.b64decode(data_b64 or "", validate=True)
+        except ValueError:
+            raise RoomError("檔案內容不是 base64")
+        if not raw:
+            raise RoomError("檔案是空的")
+        if len(raw) > self.FILE_LIMIT:
+            raise RoomError(f"檔案太大（上限 {self.FILE_LIMIT // 1024 // 1024} MB）")
+        safe = re.sub(r"[^\w.\-\u3400-\u9fff]+", "_", (name or "file").strip())[-80:] or "file"
+        rel = f"{room_id}/{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}-{safe}"
+        path = self.data / "files" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        import mimetypes
+        return {"rel": rel, "name": name or safe, "size": len(raw), "type": mimetypes.guess_type(safe)[0] or "application/octet-stream"}
+
+    def _file_path(self, rel):
+        base = (self.data / "files").resolve()
+        path = (base / rel).resolve()
+        if base not in path.parents or not path.is_file():
+            raise RoomError(f"沒有這個檔案：{rel}", 404)
+        return path
+
+    def read_file(self, actor, rel):
+        import mimetypes
+        room_id = rel.split("/", 1)[0]
+        with self.cond:
+            self._require_see(actor, room_id)
+        path = self._file_path(rel)
+        return path.read_bytes(), mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+    def post(self, actor, room_id, text, judged=None, files=None):
+        files = [f for f in (files or []) if isinstance(f, dict)]
+        for f in files:
+            if not str(f.get("rel", "")).startswith(room_id + "/"):
+                raise RoomError("附件要是傳到這間房的")
+            self._file_path(f["rel"])
+        if not text.strip() and not files:
             raise RoomError("訊息不能是空的")
         with self.cond:
             self._require_see(actor, room_id)
@@ -793,6 +838,8 @@ class Core:
                     wake = []                       # 暫停中：訊息照記，不叫醒人
             held = bool(room.get("paused")) and actor != USER
             extra = {"judged": judged} if judged else {}
+            if files:
+                extra["files"] = [{k: f.get(k) for k in ("rel", "name", "size", "type")} for f in files]
             event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake, held=held, **extra)
             for target in mentions:
                 self._open_thread(room_id, target, actor, text, "mention", ref=event["seq"])

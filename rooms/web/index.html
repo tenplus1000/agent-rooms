@@ -84,6 +84,17 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 #toolpane .body { flex: 1; overflow: auto; padding: 10px 12px; }
 #toolpane pre { white-space: pre-wrap; font-size: 12px; margin: 0; }
 .seg { display: flex; gap: 6px; margin-bottom: 10px; }
+#attach { position: fixed; left: 190px; right: 100px; bottom: 98px; display: none; gap: 6px; flex-wrap: wrap; z-index: 21; }
+#attach .chip { display: flex; align-items: center; gap: 6px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 3px 6px; font-size: 12px; max-width: 260px; }
+#attach .chip img { width: 38px; height: 38px; object-fit: cover; border-radius: 4px; }
+#attach .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#attach .chip b { cursor: pointer; color: var(--dim); }
+#clip { min-width: 52px; }
+#bar.drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.msg .att { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.msg .att img { max-width: 220px; max-height: 160px; border-radius: 6px; border: 1px solid var(--line); cursor: zoom-in; display: block; }
+.msg .att a { color: var(--accent); font-size: 12px; }
 .seg button.on { background: var(--accent); color: #0b1220; }
 .dot-label { fill: var(--dim); font-size: 11px; pointer-events: none; user-select: none; }
 .dot { cursor: grab; }
@@ -181,10 +192,13 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 <div id="toolpane"></div>
 <div id="bar">
   <div id="target"><span class="k">送到</span><span class="v" id="targetName">—</span></div>
-  <textarea id="input" placeholder="輸入訊息（@名字 可以找任何房間的人；Enter 送出，Shift+Enter 換行）"></textarea>
+  <button id="clip" title="附檔案（也可以直接貼上截圖、或把檔案拖進來）">附檔</button>
+  <textarea id="input" placeholder="輸入訊息（@名字 可以找任何房間的人；Enter 送出，Shift+Enter 換行；截圖直接貼上）"></textarea>
   <button id="send">送出</button>
+  <input type="file" id="filepick" multiple style="display:none">
 </div>
 <div id="suggest"></div>
+<div id="attach"></div>
 <div id="toast"></div>
 
 <script>
@@ -637,6 +651,22 @@ async function refreshWin(roomId) {
   }
   if (rows.length) { seenSeq[roomId] = w.last; store.set("seen", seenSeq); if (atBottom || rows.length === w.log.children.length) w.log.scrollTop = w.log.scrollHeight; }
 }
+function fileUrl(f) { return `/api/files/${f.rel.split("/").map(encodeURIComponent).join("/")}?as=${encodeURIComponent(S.ov.user.id)}`; }
+function fileEl(f) {
+  // 遠端（要鑰匙）時圖片要帶標頭抓；本機直接用網址
+  const key = store.get("key", "");
+  if ((f.type || "").startsWith("image/")) {
+    const img = el("img", { alt: f.name, title: f.name });
+    if (key) fetch(fileUrl(f), { headers: { Authorization: "Bearer " + key } }).then(r => r.blob()).then(b => { img.src = URL.createObjectURL(b); });
+    else img.src = fileUrl(f);
+    img.addEventListener("click", () => window.open(img.src, "_blank"));
+    return img;
+  }
+  const a = el("a", { href: fileUrl(f), target: "_blank", text: `📄 ${f.name}（${Math.max(1, Math.round((f.size || 0) / 1024))} KB）` });
+  if (key) a.addEventListener("click", ev => { ev.preventDefault();
+    fetch(fileUrl(f), { headers: { Authorization: "Bearer " + key } }).then(r => r.blob()).then(b => window.open(URL.createObjectURL(b), "_blank")); });
+  return a;
+}
 function msgEl(e) {
   const at = when(e.at);
   const mine = e.from === S.ov.user.id;
@@ -645,7 +675,8 @@ function msgEl(e) {
     return el("div", { class: "msg" + (mine ? " mine" : "") },
       el("div", { class: "meta" }, el("b", { text: e.from_name }), document.createTextNode(`　${at}　#${e.seq}`),
         woke ? el("span", { class: "wake", text: `　叫醒 ${woke}` }) : null),
-      el("span", { class: "body", text: e.text }));
+      el("span", { class: "body", text: e.text }),
+      (e.files || []).length ? el("div", { class: "att" }, ...e.files.map(fileEl)) : null);
   }
   const words = { join: "進了房間", leave: "離開房間", whiteboard: e.neighbor ? `改了隔壁 ${e.neighbor_name} 的白板` : "改了白板", off: "下線了", on: "回到線上",
     room_created: "開了這間房", room_renamed: `把房名改成 ${e.name}`, owner: `把${OWNER()}換成 ${e.owner_name}`,
@@ -1248,9 +1279,33 @@ async function deskRoom(sid) {
   if (!S.desks[sid]) S.desks[sid] = (await api("POST", "/api/desk", { session: sid })).room_id;
   return S.desks[sid];
 }
+// 附件：貼上截圖、📎 選檔、拖進輸入列；送出時先傳到那間房，再跟訊息一起送
+S.attach = [];
+function addFiles(list) {
+  for (const f of list) {
+    if (!f || !f.size) continue;
+    const name = f.name && f.name !== "image.png" ? f.name : `截圖-${new Date().toTimeString().slice(0, 8).replace(/:/g, "")}.${(f.type.split("/")[1] || "png")}`;
+    S.attach.push({ file: f, name, url: f.type.startsWith("image/") ? URL.createObjectURL(f) : null });
+  }
+  drawAttach();
+}
+function drawAttach() {
+  const box = $("attach"); box.replaceChildren();
+  box.style.display = S.attach.length ? "flex" : "none";
+  S.attach.forEach((a, i) => box.append(el("div", { class: "chip" }, a.url ? el("img", { src: a.url }) : null, el("span", { text: a.name }),
+    el("b", { text: "✕", title: "不附了", on: { click: () => { if (a.url) URL.revokeObjectURL(a.url); S.attach.splice(i, 1); drawAttach(); } } }))));
+}
+function b64(file) {
+  return new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1] || ""); r.onerror = bad; r.readAsDataURL(file); });
+}
+async function uploadAll(roomId) {
+  const out = [];
+  for (const a of S.attach) out.push(await api("POST", `/api/rooms/${roomId}/upload`, { name: a.name, data: await b64(a.file) }));
+  return out;
+}
 async function send() {
   const text = $("input").value.trim();
-  if (!text) return;
+  if (!text && !S.attach.length) return;
   const t = targetInfo();
   if (t.kind === "none") return toast("先點一間房，或點常駐／維修");
   try {
@@ -1265,7 +1320,11 @@ async function send() {
       if (a && a.room_id && a.room_id !== here && !(S.ov.globals || {})[a.session]) foreign.add(a.room_id); else local.push(n);
     }
     const sent = [];
-    if (!foreign.size || local.length) { await api("POST", `/api/rooms/${here}/post`, { text }); sent.push(hereName); }
+    if (!foreign.size || local.length || S.attach.length) {
+      const files = S.attach.length ? await uploadAll(here) : undefined;
+      await api("POST", `/api/rooms/${here}/post`, { text, files }); sent.push(hereName);
+      S.attach.forEach(a => a.url && URL.revokeObjectURL(a.url)); S.attach = []; drawAttach();
+    }
     for (const rid of foreign) {
       await api("POST", `/api/rooms/${rid}/post`, { text: `〔從 ${hereName} 發〕${text}` });
       sent.push((S.ov.rooms.find(r => r.room_id === rid) || {}).name || rid);
@@ -1370,6 +1429,15 @@ async function refresh() {
 }
 
 $("newRoom").addEventListener("click", newRoom);
+$("clip").addEventListener("click", () => $("filepick").click());
+$("filepick").addEventListener("change", e => { addFiles([...e.target.files]); e.target.value = ""; });
+$("input").addEventListener("paste", e => {
+  const files = [...(e.clipboardData || {}).items || []].filter(i => i.kind === "file").map(i => i.getAsFile());
+  if (files.length) { e.preventDefault(); addFiles(files); }
+});
+$("bar").addEventListener("dragover", e => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); $("bar").classList.add("drop"); } });
+$("bar").addEventListener("dragleave", () => $("bar").classList.remove("drop"));
+$("bar").addEventListener("drop", e => { e.preventDefault(); $("bar").classList.remove("drop"); addFiles([...e.dataTransfer.files]); });
 $("send").addEventListener("click", send);
 $("input").addEventListener("input", onInput);
 $("input").addEventListener("keydown", e => {
