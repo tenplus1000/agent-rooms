@@ -22,6 +22,7 @@ import datetime
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -658,7 +659,8 @@ class ClaudeWorker(Worker):
                 time.sleep(BACKOFF["error"])
 
 
-QUOTA_HIT = "hit your session limit"
+# 額度用完的訊息（「You've hit your session limit」「You've hit your 5-hour limit」「…weekly limit」）
+QUOTA_HIT = re.compile(r"hit your [\w -]*limit", re.I)
 
 
 def quota_until(account, until=None):
@@ -792,7 +794,7 @@ class HeadlessClaudeWorker(Worker):
                 json.dump(member, fh, ensure_ascii=False, indent=1)
         call("POST", "/api/touch", session=self.session)
         said = str(result.get("result") or "")
-        if (done.returncode or result.get("is_error")) and QUOTA_HIT in said:
+        if (done.returncode or result.get("is_error")) and QUOTA_HIT.search(said):
             until = quota_reset(said)
             quota_until(member["account"], until)
             call("POST", "/api/rewind", session=self.session, room_id=room_id, seq=events[0]["seq"] - 1)
