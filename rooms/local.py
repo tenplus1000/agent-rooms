@@ -173,6 +173,50 @@ def start_tool(tool_id):
     return {"id": tool_id, "started": True, "log": str(logs / f"{tool_id}.log")}
 
 
+def _listeners(url):
+    """在聽這個網址那個埠的程式（pid）。用 ss 找，不管是不是房間開的（例如別的對話開的也停得掉）。"""
+    port = urlparse(url).port
+    if not port:
+        return []
+    out = subprocess.run(["ss", "-ltnpH", f"sport = :{port}"], capture_output=True, text=True, timeout=5).stdout
+    return sorted({int(p) for p in __import__("re").findall(r"pid=(\d+)", out)})
+
+
+def stop_tool(tool_id):
+    """停掉在聽這個工具埠的程式（先禮貌地請它停，兩秒還在就強制）。轉進來的網址（例如 ssh 轉發）不停。"""
+    import signal
+    import time
+    tool = _tool(tool_id)
+    if not tool.get("start"):
+        raise ValueError(f"{tool['name']} 不是在這台跑的（沒登記啟動指令），不能從這裡停")
+    pids = _listeners(tool["url"])
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    for _ in range(20):
+        if not _listeners(tool["url"]):
+            break
+        time.sleep(0.1)
+    for pid in _listeners(tool["url"]):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    return {"id": tool_id, "stopped": pids}
+
+
+def restart_tool(tool_id):
+    stop_tool(tool_id)
+    import time
+    for _ in range(30):
+        if not _alive(_tool(tool_id)["url"]):
+            break
+        time.sleep(0.1)
+    return start_tool(tool_id)
+
+
 def tool_map(tool_id):
     from rooms import codemap
     tool = _tool(tool_id)
@@ -249,6 +293,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send({"ok": True, "result": decide(data)})
             if urlparse(self.path).path == "/local/tools/start":
                 return self._send(start_tool(data.get("id", "")))
+            if urlparse(self.path).path == "/local/tools/stop":
+                return self._send(stop_tool(data.get("id", "")))
+            if urlparse(self.path).path == "/local/tools/restart":
+                return self._send(restart_tool(data.get("id", "")))
             self._send({"error": "not found"}, 404)
         except (ValueError, KeyError) as exc:
             self._send({"error": str(exc)}, 400)

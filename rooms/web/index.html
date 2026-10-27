@@ -1115,6 +1115,8 @@ function toolMenu(t, x, y) {
       el("button", { text: "開成分頁", on: { click: () => { closeTop(); window.open(t.url, "_blank"); } } }),
       t.repo ? el("button", { text: "程式圖", on: { click: () => { closeTop(); openToolPane(t, "map"); } } }) : null,
       up === false && t.start && S.local ? el("button", { text: "啟動", on: { click: () => { closeTop(); startTool(t); } } }) : null,
+      up && t.start && S.local ? el("button", { text: "重開", on: { click: () => { closeTop(); startTool(t, "restart"); } } }) : null,
+      up && t.start && S.local ? el("button", { text: "停止", on: { click: () => { closeTop(); stopTool(t); } } }) : null,
       el("button", { text: "改", on: { click: () => { closeTop(); toolForm(t); } } }),
       el("button", { text: "刪", class: "danger", on: { click: async () => { closeTop();
         if (await dialog({ title: `刪掉 ${t.name}？`, text: "只是從房間拿掉登記，工具本身不受影響。", ok: "刪", danger: true }))
@@ -1143,8 +1145,14 @@ function roomToolMenu(t, r, x, y) {
   document.body.append(layer, pop);
   pushLayer(() => { pop.remove(); layer.remove(); });
 }
-async function startTool(t) {
-  try { await local("POST", "/local/tools/start", { id: t.id }); toast(`${t.name} 啟動中…`); }
+async function stopTool(t) {
+  try { await local("POST", "/local/tools/stop", { id: t.id }); toast(`${t.name} 停了`); }
+  catch (e) { toast("停不了：" + e.message); }
+  if (S.pane && S.pane.id === t.id) closeToolPane();
+  refreshToolStatus();
+}
+async function startTool(t, how = "start") {
+  try { await local("POST", `/local/tools/${how}`, { id: t.id }); toast(`${t.name} ${how === "restart" ? "重開" : "啟動"}中…`); }
   catch (e) { return toast("啟動不了：" + e.message); }
   for (let i = 0; i < 10; i++) {
     await new Promise(r => setTimeout(r, 800));
