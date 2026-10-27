@@ -68,6 +68,23 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 #world svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
 .room-label { fill: var(--text); font-size: 14px; font-weight: 600; cursor: grab; user-select: none; }
 .room-sub { fill: var(--dim); font-size: 11px; user-select: none; }
+.room-tool { font-size: 11px; cursor: pointer; user-select: none; }
+.tool-ball { position: fixed; z-index: 17; width: 42px; text-align: center; cursor: grab; user-select: none; touch-action: none; }
+.tool-ball .orb { width: 34px; height: 34px; margin: 0 auto; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-weight: 700; color: #0b1220; box-shadow: 0 3px 10px rgba(0,0,0,.45), inset -3px -4px 8px rgba(0,0,0,.25); position: relative; }
+.tool-ball .orb i { position: absolute; right: -1px; top: -1px; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--bg); }
+.tool-ball .nm { font-size: 10px; color: var(--dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool-ball.on .orb { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tool-group { position: fixed; z-index: 16; font-size: 10px; color: var(--dim); width: 96px; text-align: right; white-space: nowrap; pointer-events: none; }
+#toolpane { position: fixed; top: 44px; bottom: 96px; right: 70px; width: min(460px, 42vw); z-index: 18; display: none;
+  flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); box-shadow: -10px 0 30px rgba(0,0,0,.45); }
+#toolpane header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+#toolpane header .t { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#toolpane iframe { flex: 1; border: 0; width: 100%; background: #fff; }
+#toolpane .body { flex: 1; overflow: auto; padding: 10px 12px; }
+#toolpane pre { white-space: pre-wrap; font-size: 12px; margin: 0; }
+.seg { display: flex; gap: 6px; margin-bottom: 10px; }
+.seg button.on { background: var(--accent); color: #0b1220; }
 .dot-label { fill: var(--dim); font-size: 11px; pointer-events: none; user-select: none; }
 .dot { cursor: grab; }
 [data-room].snap polygon { stroke: var(--cube-sel); stroke-width: 2.5; stroke-opacity: 1; }
@@ -160,6 +177,8 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 </div>
 <div id="stage"><div id="world"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg><div id="overlay"></div></div></div>
 <div id="roombar"></div>
+<div id="tooldock"></div>
+<div id="toolpane"></div>
 <div id="bar">
   <div id="target"><span class="k">送到</span><span class="v" id="targetName">—</span></div>
   <textarea id="input" placeholder="輸入訊息（@名字 可以找任何房間的人；Enter 送出，Shift+Enter 換行）"></textarea>
@@ -344,7 +363,7 @@ function render() {
   // 由後往前畫（畫面上越上面的越後面），接上的房才不會被後面那間蓋住
   rooms().map((r, i) => [r, roomPos(r, i)]).sort((a, b) => a[1][1] - b[1][1] || a[1][0] - b[1][0])
     .forEach(([r, pos]) => drawRoom(svg, overlay, r, pos));
-  drawOutside();
+  drawOutside(); drawTools();
   updateTarget(); placeRoombar();
   for (const id of Object.keys(S.wins)) if (!S.ov.rooms.find(r => r.room_id === id)) closeWin(id);
 }
@@ -402,6 +421,13 @@ function drawRoom(svg, overlay, r, [px, py]) {
   g.append(label);
   g.append(el("text", { x: lx, y: ly - 11, class: "room-sub", "text-anchor": "middle",
     text: `${r.room_id}・${OWNER()} ${r.owner_name}${flags ? "・" + flags : ""}`, fill: r.paused ? "var(--warn)" : null }));
+  // 接到這間的本機工具：點名字打開窄窗
+  (S.ov.tools || []).filter(t => (t.rooms || []).includes(r.room_id)).forEach((t, k) => {
+    const tt = el("text", { x: lx, y: ly - 42 - k * 14, class: "room-tool", "text-anchor": "middle", fill: TOOL_COLOR[t.category] || "var(--accent)",
+      "data-room-tool": t.id, text: `◆ ${t.name}` });
+    tt.addEventListener("pointerdown", e => { e.stopPropagation(); roomToolMenu(t, r, e.clientX, e.clientY); });
+    g.append(tt);
+  });
   const linked = Object.keys(r.neighbors || {});
   if (linked.length) g.append(el("text", { x: lx, y: ly + 4, class: "room-sub", "text-anchor": "middle", fill: "var(--cube-sel)",
     "data-linked": r.room_id, text: `共用白板：${linked.join("、")}` }));
@@ -624,6 +650,7 @@ function msgEl(e) {
   const words = { join: "進了房間", leave: "離開房間", whiteboard: e.neighbor ? `改了隔壁 ${e.neighbor_name} 的白板` : "改了白板", off: "下線了", on: "回到線上",
     room_created: "開了這間房", room_renamed: `把房名改成 ${e.name}`, owner: `把${OWNER()}換成 ${e.owner_name}`,
     linked: `把這間跟 ${e.other_name}（${e.other}）接上了，共用白板`, unlinked: `把這間跟 ${e.other_name}（${e.other}）拉開了`,
+    tool_linked: `把本機工具 ${e.tool_name} 接到這間房`, tool_unlinked: `把本機工具 ${e.tool_name} 從這間房拿掉`,
     paused: e.text, delivery: `〔送不到〕${e.detail || ""}`, task: `任務 ${e.task_id} ${e.action}：${e.objective || ""}` };
   return el("div", { class: "msg sys" }, el("span", { class: "body", text: `${at}　${e.from_name} ${words[e.type] || e.type}` }));
 }
@@ -1000,6 +1027,206 @@ async function accPanel(m) {
   pushLayer(() => layer.remove());
 }
 
+// ── 本機工具：右側的小球（儀表板、資料庫與檢視介面、助手工具）──────────────
+// 工具各自獨立跑，房間只登記網址、repo 和怎麼啟動。點兩下開窄窗，窄窗再展開就變成瀏覽器的分頁；拖到房間上就接到那間。
+const TOOL_COLOR = { dashboard: "#5fd3c6", database: "#8fd16a", assistant: "#f0a35e" };
+const TOOL_TEMPLATES = {     // 加新工具時照分類先填好的樣子（怎麼做一個新的見 docs/tool-templates.md）
+  dashboard: { url: "http://127.0.0.1:8790/", start: "", note: "看數字的頁面，只讀；可以是從別台轉進來的網址" },
+  database: { url: "http://127.0.0.1:8773/", start: "python3 tools/server.py --port 8773", note: "唯讀檢視資料，只綁 127.0.0.1" },
+  assistant: { url: "http://127.0.0.1:8772/", start: "python3 server.py --port 8772", note: "幫手類網頁工具，只綁 127.0.0.1" },
+};
+S.toolUp = {};
+function toolKinds() { return (S.ov && S.ov.tool_kinds) || { dashboard: "儀表板", database: "資料庫與檢視介面", assistant: "助手工具" }; }
+function drawTools() {
+  const dock = $("tooldock"); dock.replaceChildren();
+  const tools = (S.ov && S.ov.tools) || [];
+  let y = 58;
+  const bottom = innerHeight - 110;
+  for (const [kind, label] of Object.entries(toolKinds())) {
+    const mine = tools.filter(t => t.category === kind);
+    const free = mine.filter(t => !t.pos);
+    dock.append(el("div", { class: "tool-group", style: `right:6px;top:${y}px`, text: label }));
+    y += 16;
+    for (const t of mine) {
+      let x, ty;
+      if (t.pos) { [x, ty] = t.pos; x = Math.min(Math.max(0, x), innerWidth - 44); ty = Math.min(Math.max(46, ty), bottom); }
+      else { x = innerWidth - 56; ty = y; y += 58; }
+      dock.append(toolBall(t, x, ty));
+    }
+    y += free.length ? 6 : 10;
+  }
+  const add = el("div", { class: "tool-ball", style: `left:${innerWidth - 56}px;top:${Math.min(y + 4, bottom)}px`, title: "加一個本機工具" },
+    el("div", { class: "orb", style: "background:var(--panel2);color:var(--dim);border:1px dashed var(--line)", text: "＋" }),
+    el("div", { class: "nm", text: "加工具" }));
+  add.addEventListener("click", () => toolForm());
+  dock.append(add);
+}
+function toolBall(t, x, y) {
+  const up = S.toolUp[t.id];
+  const b = el("div", { class: "tool-ball" + (S.pane && S.pane.id === t.id ? " on" : ""), "data-tool": t.id, style: `left:${x}px;top:${y}px`,
+      title: `${t.name}\n${t.url}${up === false ? "\n（沒在跑）" : ""}\n點一下：選單・點兩下：開窄窗・拖到房間：接上` },
+    el("div", { class: "orb", style: `background:${TOOL_COLOR[t.category] || "#9aa"}` }, document.createTextNode([...t.name][0] || "?"),
+      up === undefined ? null : el("i", { style: `background:${up ? "#56d364" : "#6b7280"}` })),
+    el("div", { class: "nm", text: t.name }));
+  b.addEventListener("pointerdown", e => startToolDrag(e, t, b));
+  return b;
+}
+let toolClick = null;
+function startToolDrag(e, t, ball) {
+  e.preventDefault();
+  const sx = e.clientX, sy = e.clientY, ox = ball.offsetLeft, oy = ball.offsetTop;
+  let moved = false;
+  const move = ev => {
+    if (!moved && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 5) moved = true;
+    if (moved) { ball.style.left = ox + ev.clientX - sx + "px"; ball.style.top = oy + ev.clientY - sy + "px"; S.dragging = true; }
+  };
+  const up = async ev => {
+    removeEventListener("pointermove", move); removeEventListener("pointerup", up);
+    if (!moved) {                                  // 點兩下開窄窗；點一下等一下再開選單，免得跟點兩下搶
+      if (toolClick && toolClick.id === t.id) { clearTimeout(toolClick.timer); toolClick = null; return openToolPane(t); }
+      toolClick = { id: t.id, timer: setTimeout(() => { toolClick = null; toolMenu(t, ev.clientX, ev.clientY); }, 260) };
+      return;
+    }
+    S.dragging = false;
+    ball.style.visibility = "hidden";
+    const cube = document.elementsFromPoint(ev.clientX, ev.clientY).map(n => n.closest && n.closest("[data-room]")).find(Boolean);
+    ball.style.visibility = "";
+    try {
+      if (cube) {
+        const rid = cube.getAttribute("data-room");
+        await api("POST", "/api/tools/link", { id: t.id, room_id: rid, on: 1 });
+        toast(`${t.name} 接到 ${rid}`);
+      } else {
+        await api("POST", "/api/tools", { id: t.id, pos: [ball.offsetLeft, ball.offsetTop] });
+      }
+    } catch (err) { toast(err.message); }
+    S.dirty = false; refresh();
+  };
+  addEventListener("pointermove", move); addEventListener("pointerup", up);
+}
+function toolMenu(t, x, y) {
+  const up = S.toolUp[t.id];
+  const rooms_ = rooms();
+  const pop = el("div", { class: "pop", style: `left:${Math.min(x, innerWidth - 280)}px;top:${Math.min(y, innerHeight - 320)}px` },
+    el("div", { class: "name", text: `${t.name}（${toolKinds()[t.category] || t.category}）` }),
+    el("div", { class: "sub", text: `${t.url}${t.repo ? "\n" + t.repo : ""}${up === false ? "\n沒在跑" : ""}` }),
+    el("div", { class: "acts" },
+      el("button", { text: "開窄窗", on: { click: () => { closeTop(); openToolPane(t); } } }),
+      el("button", { text: "開成分頁", on: { click: () => { closeTop(); window.open(t.url, "_blank"); } } }),
+      t.repo ? el("button", { text: "程式圖", on: { click: () => { closeTop(); openToolPane(t, "map"); } } }) : null,
+      up === false && t.start && S.local ? el("button", { text: "啟動", on: { click: () => { closeTop(); startTool(t); } } }) : null,
+      el("button", { text: "改", on: { click: () => { closeTop(); toolForm(t); } } }),
+      el("button", { text: "刪", class: "danger", on: { click: async () => { closeTop();
+        if (await dialog({ title: `刪掉 ${t.name}？`, text: "只是從房間拿掉登記，工具本身不受影響。", ok: "刪", danger: true }))
+          act(api("POST", "/api/tools/delete", { id: t.id }), `${t.name} 拿掉了`); } } })),
+    el("div", { class: "sub", text: "接到房間（再點一次拿掉）：", style: "margin-top:8px" }),
+    el("div", { class: "acts" }, ...rooms_.map(r => {
+      const on = (t.rooms || []).includes(r.room_id);
+      return el("button", { text: (on ? "✓ " : "") + r.room_id, title: r.name, on: { click: () => { closeTop();
+        act(api("POST", "/api/tools/link", { id: t.id, room_id: r.room_id, on: on ? 0 : 1 }), on ? `${t.name} 從 ${r.room_id} 拿掉` : `${t.name} 接到 ${r.room_id}`); } } });
+    })));
+  pop.querySelector(".sub").style.whiteSpace = "pre-wrap";
+  const layer = el("div", { style: "position:fixed;inset:0;z-index:39" });
+  layer.addEventListener("pointerdown", () => closeTop());
+  document.body.append(layer, pop);
+  pushLayer(() => { pop.remove(); layer.remove(); });
+}
+function roomToolMenu(t, r, x, y) {
+  const pop = el("div", { class: "pop", style: `left:${Math.min(x, innerWidth - 260)}px;top:${Math.min(y, innerHeight - 160)}px` },
+    el("div", { class: "name", text: t.name }),
+    el("div", { class: "acts" },
+      el("button", { text: "開窄窗", on: { click: () => { closeTop(); openToolPane(t); } } }),
+      el("button", { text: `從 ${r.room_id} 拿掉`, on: { click: () => { closeTop();
+        act(api("POST", "/api/tools/link", { id: t.id, room_id: r.room_id, on: 0 }), `${t.name} 從 ${r.room_id} 拿掉`); } } })));
+  const layer = el("div", { style: "position:fixed;inset:0;z-index:39" });
+  layer.addEventListener("pointerdown", () => closeTop());
+  document.body.append(layer, pop);
+  pushLayer(() => { pop.remove(); layer.remove(); });
+}
+async function startTool(t) {
+  try { await local("POST", "/local/tools/start", { id: t.id }); toast(`${t.name} 啟動中…`); }
+  catch (e) { return toast("啟動不了：" + e.message); }
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 800));
+    await refreshToolStatus();
+    if (S.toolUp[t.id]) { toast(`${t.name} 起來了`); if (S.pane && S.pane.id === t.id) openToolPane(t, S.pane.view); return; }
+  }
+  toast(`${t.name} 還沒起來，記錄檔在 ~/.local/state/agent-rooms/tools/${t.id}.log`);
+}
+function closeToolPane() {
+  const pane = $("toolpane");
+  pane.style.display = "none"; pane.replaceChildren();
+  if (S.pane) S.layers = S.layers.filter(l => l.id !== S.pane.layer);
+  S.pane = null; drawTools();
+}
+async function openToolPane(t, view = "page") {
+  const pane = $("toolpane");
+  if (S.pane) S.layers = S.layers.filter(l => l.id !== S.pane.layer);
+  S.pane = { id: t.id, view, layer: pushLayer(() => closeToolPane()) };
+  const head = el("header", {}, el("span", { class: "t", text: t.name }),
+    t.repo ? el("button", { text: view === "map" ? "畫面" : "程式圖", on: { click: () => openToolPane(t, view === "map" ? "page" : "map") } }) : null,
+    el("button", { text: "展開 ↗", title: "開成瀏覽器的分頁", on: { click: () => { window.open(t.url, "_blank"); closeToolPane(); } } }),
+    el("button", { text: "✕", on: { click: () => closeToolPane() } }));
+  pane.replaceChildren(head);
+  pane.style.display = "flex";
+  drawTools();
+  if (view === "map") {
+    const body = el("div", { class: "body" }, el("pre", { text: "產生程式圖中…" }));
+    pane.append(body);
+    try { const m = await local("GET", "/local/tools/map", { id: t.id }); body.firstChild.textContent = m.text; }
+    catch (e) { body.firstChild.textContent = "讀不到程式圖（本機小幫手沒開？）：" + e.message; }
+    return;
+  }
+  if (S.toolUp[t.id] === false) {
+    pane.append(el("div", { class: "body" }, el("p", { text: `${t.name} 現在沒在跑。` }),
+      t.start && S.local ? el("button", { text: "啟動", on: { click: () => startTool(t) } }) : el("p", { class: "sub", text: t.start ? "本機小幫手沒開，沒辦法從這裡啟動。" : "沒登記怎麼啟動。" })));
+    return;
+  }
+  pane.append(el("iframe", { src: t.url, title: t.name }));
+}
+async function refreshToolStatus() {
+  if (!S.local) return;
+  try {
+    const got = await local("GET", "/local/tools/status");
+    if (JSON.stringify(got) !== JSON.stringify(S.toolUp)) { S.toolUp = got; drawTools(); }
+  } catch (e) {}
+}
+function toolForm(t) {
+  let kind = t ? t.category : "assistant";
+  const f = {};
+  const fields = [["name", "名字"], ["url", "網址（http://127.0.0.1:埠/）"], ["repo", "repo 資料夾（看程式圖、在這裡啟動）"],
+                  ["start", "啟動指令（在 repo 裡跑，沒有就留空）"], ["note", "說明（給房裡的人看）"]];
+  const box = el("div", { class: "dialog wide" }, el("h3", { text: t ? `改 ${t.name}` : "加一個本機工具" }));
+  const seg = el("div", { class: "seg" });
+  const fill = () => {
+    [...seg.children].forEach(b => b.classList.toggle("on", b.dataset.kind === kind));
+    if (!t) for (const k of ["url", "start", "note"]) if (!f[k].dataset.touched) f[k].value = TOOL_TEMPLATES[kind][k];
+  };
+  for (const [k, label] of Object.entries(toolKinds()))
+    seg.append(el("button", { text: label, "data-kind": k, on: { click: () => { kind = k; fill(); } } }));
+  box.append(el("p", { text: "分類（照分類先填好模板，要改再改）：", style: "margin:0 0 6px" }), seg);
+  for (const [k, label] of fields) {
+    f[k] = el("input", { placeholder: label });
+    f[k].value = t ? (t[k] || "") : "";
+    f[k].addEventListener("input", () => { f[k].dataset.touched = "1"; });
+    box.append(f[k]);
+  }
+  fill();
+  const done = () => { layer.remove(); S.layers = S.layers.filter(l => l.id !== id); };
+  box.append(el("div", { class: "row" }, el("button", { text: "取消", on: { click: done } }),
+    el("button", { text: t ? "存" : "加", on: { click: async () => {
+      const body = { category: kind }; for (const [k] of fields) body[k] = f[k].value.trim();
+      if (t) body.id = t.id;
+      try { await api("POST", "/api/tools", body); done(); toast(t ? "改好了" : `${body.name} 加好了`); refresh(); refreshToolStatus(); }
+      catch (e) { toast(e.message); }
+    } } })));
+  const layer = el("div", { class: "layer" }, box);
+  layer.addEventListener("pointerdown", e => { if (e.target === layer) done(); });
+  document.body.append(layer);
+  const id = pushLayer(done);
+  f.name.focus();
+}
+
 // ── 輸入框：送到哪 ───────────────────────────────
 function targetInfo() {
   if (S.mode) { const g = globals().find(x => x.sid === S.mode); if (g) return { kind: "desk", sid: g.sid, label: `${callOf(g)}（${g.kind === "maintainer" ? "維修" : "常駐"}模式）` }; }
@@ -1147,8 +1374,9 @@ $("fit").addEventListener("click", fitAll);
 setupView();
 refresh();
 setInterval(refresh, 2500);
-refreshLocal();
-setInterval(refreshLocal, 30000);
+refreshLocal().then(refreshToolStatus);
+setInterval(() => refreshLocal().then(refreshToolStatus), 30000);
+addEventListener("resize", () => drawTools());
 </script>
 </body>
 </html>

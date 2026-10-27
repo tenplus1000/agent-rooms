@@ -25,6 +25,7 @@ def decide(d):
     waiting[:] = [w for w in waiting if w["id"] != d["id"]]
     return {"id": d["id"], "status": d["choice"] + "ed"}
 local.decide = decide
+local.tool_status = lambda: {}
 local.serve(8797)
 """
 data = tempfile.mkdtemp(prefix="rooms-ui-")
@@ -357,6 +358,30 @@ try:
     check("白板框可以編輯", js("!!document.querySelector('.dialog textarea.board-edit')"))
     js("document.querySelector('.dialog textarea').value = '規矩：先讀再做'; [...document.querySelectorAll('.dialog button')].pop().click()"); time.sleep(1.2)
     check("白板存檔寫回核心", call("GET", "/api/rooms/%s/whiteboard" % r1) == "規矩：先讀再做")
+    # 本機工具：右側小球，點兩下開窄窗，拖到房間上就接上
+    kit = call("POST", "/api/tools", name="測試儀表板", category="dashboard", url=BASE + "/")
+    time.sleep(3)
+    check("工具小球出現在右側", js(f"(() => {{ const b = document.querySelector('[data-tool=\"{kit['id']}\"]'); return !!b && b.getBoundingClientRect().left > innerWidth - 120; }})()"))
+    bx, by = center(f'[data-tool="{kit["id"]}"] .orb')
+    click(bx, by); time.sleep(0.08); click(bx, by); time.sleep(1.2)
+    check("點兩下開窄窗", js("getComputedStyle(document.getElementById('toolpane')).display") == "flex"
+          and js("!!document.querySelector('#toolpane iframe')"))
+    shot("工具窄窗")
+    key("Escape"); time.sleep(0.5)
+    check("Esc 關窄窗", js("getComputedStyle(document.getElementById('toolpane')).display") == "none")
+    top1 = js(f"""(() => {{ const g = document.querySelector('[data-room="{r1}"]'); const ps = g.querySelectorAll('polygon'); const p = ps[ps.length - 1];
+        const b = p.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height * 0.5]; }})()""")
+    drag((bx, by), tuple(top1)); time.sleep(1.5)
+    linked = next(t for t in call("GET", "/api/tools") if t["id"] == kit["id"])["rooms"]
+    check("拖到房間上就接上", linked == [r1])
+    check("房間底下列出接上的工具", js(f"!!document.querySelector('[data-room-tool=\"{kit['id']}\"]')"))
+    check("房裡記一筆接上工具", any(e["type"] == "tool_linked" for e in call("GET", f"/api/rooms/{r1}/history")))
+    click(*center('.tool-ball[title="加一個本機工具"] .orb')); time.sleep(0.6)
+    check("加工具照分類先填模板", "8772" in (js("document.querySelectorAll('.dialog input')[1].value") or ""))
+    js("const i = document.querySelectorAll('.dialog input'); i[0].value = '測試助手'; [...document.querySelectorAll('.dialog button')].pop().click()"); time.sleep(1.5)
+    check("加工具存進核心", any(t["name"] == "測試助手" and t["category"] == "assistant" for t in call("GET", "/api/tools")))
+    shot("工具小球")
+
     # 本機小幫手（acc、判斷層的建議）：假的小幫手，a1 有兩則等決定
     fake = subprocess.Popen([sys.executable, "-c", FAKE_LOCAL], env=dict(env, ROOMS_LOCAL_ORIGINS=BASE),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

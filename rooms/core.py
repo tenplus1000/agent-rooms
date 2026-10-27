@@ -61,6 +61,9 @@ def _now():
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+# 工具的分類：畫面右側照這三類排，加新工具時照該類的模板填（見 docs/tool-templates.md）
+TOOL_KINDS = {"dashboard": "儀表板", "database": "資料庫與檢視介面", "assistant": "助手工具"}
+
 class Core:
     def __init__(self, data_dir):
         self.data = Path(data_dir)
@@ -278,6 +281,76 @@ class Core:
                     self._emit(a, "unlinked", actor, other=b, other_name=self.state["rooms"][b]["name"])
             self._commit()
             return {"room_id": room_id, "pos": self.state["rooms"][room_id]["pos"]}
+
+    # ── 本機工具：使用者自己在跑的網頁（儀表板、資料庫、助手），登記在這裡，畫面上變成右側的小球 ──
+    # 工具本身各自獨立運作，這裡只記網址、repo 與怎麼啟動；接到房間後，房裡的人用 `room tools` 就知道是哪一個。
+
+    def tools(self, actor):
+        with self.cond:
+            return [dict(t) for t in self.state.get("tools", {}).values()]
+
+    def set_tool(self, actor, data):
+        """新增或修改一個工具（使用者或全域角色）。有 id 就是改，沒有就是新增。"""
+        with self.cond:
+            if not self._admin(actor):
+                raise RoomError("只有使用者或全域角色能登記工具", 403)
+            tools = self.state.setdefault("tools", {})
+            tid = (data.get("id") or "").strip()
+            if tid and tid not in tools:
+                raise RoomError(f"沒有這個工具：{tid}", 404)
+            if not tid:
+                self.state["seq"]["tool"] = self.state["seq"].get("tool", 0) + 1
+                tid = f"K{self.state['seq']['tool']}"
+                tools[tid] = {"id": tid, "rooms": []}
+            tool = tools[tid]
+            for key in ("name", "category", "url", "repo", "start", "note"):
+                if key in data:
+                    tool[key] = str(data[key] or "").strip()
+            if "pos" in data:
+                tool["pos"] = [float(v) for v in data["pos"]] if data["pos"] else None
+            if not tool.get("name") or not tool.get("url"):
+                raise RoomError("工具要有名字和網址")
+            if tool.get("category") not in TOOL_KINDS:
+                raise RoomError(f"分類要是 {'、'.join(TOOL_KINDS)} 其中一個")
+            self._commit()
+            return dict(tool)
+
+    def delete_tool(self, actor, tool_id):
+        with self.cond:
+            if not self._admin(actor):
+                raise RoomError("只有使用者或全域角色能刪工具", 403)
+            tool = self.state.get("tools", {}).pop(tool_id, None)
+            if not tool:
+                raise RoomError(f"沒有這個工具：{tool_id}", 404)
+            for rid in tool.get("rooms", []):
+                if rid in self.state["rooms"]:
+                    self._emit(rid, "tool_unlinked", actor, tool=tool_id, tool_name=tool["name"])
+            self._commit()
+            return {"id": tool_id, "deleted": True}
+
+    def link_tool(self, actor, tool_id, room_id, on=True):
+        """把工具接到房間（或拿掉）。房裡記一筆，平常不叫醒誰；要他們看時說「房間接的那個」就知道是哪一個。"""
+        with self.cond:
+            if not self._is_room_owner(actor, room_id):
+                raise RoomError("只有使用者、全域角色或負責人能把工具接到房間", 403)
+            tool = self.state.get("tools", {}).get(tool_id)
+            if not tool:
+                raise RoomError(f"沒有這個工具：{tool_id}", 404)
+            self._room(room_id)
+            linked = tool.setdefault("rooms", [])
+            if on and room_id not in linked:
+                linked.append(room_id)
+                self._emit(room_id, "tool_linked", actor, tool=tool_id, tool_name=tool["name"], url=tool["url"])
+            elif not on and room_id in linked:
+                linked.remove(room_id)
+                self._emit(room_id, "tool_unlinked", actor, tool=tool_id, tool_name=tool["name"])
+            self._commit()
+            return dict(tool)
+
+    def room_tools(self, actor, room_id):
+        with self.cond:
+            self._require_see(actor, room_id)
+            return [dict(t) for t in self.state.get("tools", {}).values() if room_id in t.get("rooms", [])]
 
     def set_owner(self, actor, room_id, session):
         """換負責人：使用者或全域角色；新的負責人要在房裡。"""
@@ -1261,5 +1334,6 @@ class Core:
                 view["neighbors"] = self.neighbors(rid)
                 rooms.append(view)
             return {"rooms": rooms, "agents": agents, "globals": dict(self._globals()),
+                    "tools": [dict(t) for t in self.state.get("tools", {}).values()], "tool_kinds": TOOL_KINDS,
                     "user": {"id": USER, "name": USER_NAME}, "labels": {"owner": OWNER_LABEL}}
 

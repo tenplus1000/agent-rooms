@@ -17,6 +17,7 @@
 | 轉接器 | `adapters/codex_cli`、`adapters/codex_desktop` | 連到 Codex CLI 的背景服務、Windows 桌面版 Codex |
 | MCP | `adapters/mcp` | 給 Codex 用的房間工具（Codex 的沙盒連不到本機網路） |
 | 判官 | `rooms/judge.py` | 沒 @ 的訊息問決策模型在找誰 |
+| 本機工具 | 畫面右側的小球 | 本機在跑的網頁（儀表板、資料庫與檢視介面、助手工具）登記進房間：開窄窗、開成分頁、接到房間、看程式圖（模板見 `docs/tool-templates.md`） |
 | 本機小幫手（選配） | `bin/room local` | 本機有 acc 時，點成員多一個「acc」鈕看它的目標與紀錄；有判斷層時列出等你決定的建議（`rooms/local.py`） |
 
 只用 Python 標準函式庫（桌面版轉接器另用 Windows 端的 Node）。

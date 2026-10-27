@@ -4,6 +4,7 @@
 - acc（Agent Context Controller）：點成員的點多一個「acc」鈕，看那個對話的目前目標、擱置、已結案、工作紀錄，
   以及它專案上等使用者決定的 Super 建議。找法：PATH 上的 `acc`（或 ROOMS_ACC_REPO 指到 repo）。
 - 判斷層的建議佇列：ROOMS_JUDGMENT_LAYER 指到那個資料夾才接，照它的命令列介面 list／decide。
+- 本機工具（畫面右側的小球）：看有沒有在跑、照登記的指令啟動、產生 repo 的程式圖。
 
 核心跑在容器裡碰不到這些，所以由這支在主機上跑、頁面直接連。任何網頁都能連 127.0.0.1，
 所以每個請求都要帶 X-Rooms-Local 標頭（逼瀏覽器先問過 CORS），而且只認 ROOMS_LOCAL_ORIGINS 列的來源。
@@ -15,8 +16,10 @@ import functools
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -124,6 +127,61 @@ def decide(data):
     return jl("decide", data["id"], choice, "--by", "user", "--via", "room")
 
 
+# ── 本機工具：看有沒有在跑、照登記的指令啟動、產生程式圖。工具的資料以核心登記的為準，頁面送來的只拿代號 ──
+
+CORE = os.environ.get("ROOMS_URL", "http://127.0.0.1:8775")
+
+
+def core_tools():
+    from rooms.identity import USER
+    with urllib.request.urlopen(f"{CORE}/api/tools?as={USER}", timeout=5) as resp:
+        return json.loads(resp.read().decode("utf-8"))["result"]
+
+
+def _tool(tool_id):
+    tool = next((t for t in core_tools() if t["id"] == tool_id), None)
+    if not tool:
+        raise ValueError(f"沒有這個工具：{tool_id}")
+    return tool
+
+
+def _alive(url):
+    u = urlparse(url)
+    try:
+        with socket.create_connection((u.hostname or "127.0.0.1", u.port or (443 if u.scheme == "https" else 80)), timeout=0.4):
+            return True
+    except OSError:
+        return False
+
+
+def tool_status():
+    return {t["id"]: _alive(t["url"]) for t in core_tools()}
+
+
+def start_tool(tool_id):
+    """照核心登記的啟動指令，在 repo 資料夾裡背景跑起來（關掉頁面也不會停）；輸出寫進記錄檔。"""
+    tool = _tool(tool_id)
+    if not tool.get("start"):
+        raise ValueError(f"{tool['name']} 沒登記怎麼啟動")
+    if _alive(tool["url"]):
+        return {"id": tool_id, "already": True}
+    logs = Path(os.path.expanduser("~/.local/state/agent-rooms/tools"))
+    logs.mkdir(parents=True, exist_ok=True)
+    out = open(logs / f"{tool_id}.log", "ab")
+    subprocess.Popen(["bash", "-lc", tool["start"]], cwd=os.path.expanduser(tool.get("repo") or "~"),
+                     stdout=out, stderr=out, stdin=subprocess.DEVNULL, start_new_session=True)
+    return {"id": tool_id, "started": True, "log": str(logs / f"{tool_id}.log")}
+
+
+def tool_map(tool_id):
+    from rooms import codemap
+    tool = _tool(tool_id)
+    if not tool.get("repo"):
+        raise ValueError(f"{tool['name']} 沒登記 repo")
+    path, text = codemap.write(tool_id, os.path.expanduser(tool["repo"]))
+    return {"id": tool_id, "path": str(path), "text": text}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
@@ -172,6 +230,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(caps())
             if url.path == "/local/session":
                 return self._send(session_view(q.get("sid", "")))
+            if url.path == "/local/tools/status":
+                return self._send(tool_status())
+            if url.path == "/local/tools/map":
+                return self._send(tool_map(q.get("id", "")))
             if url.path == "/local/badges":
                 return self._send(badges([s for s in q.get("sids", "").split(",") if s]))
             self._send({"error": "not found"}, 404)
@@ -185,6 +247,8 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
             if urlparse(self.path).path == "/local/decide":
                 return self._send({"ok": True, "result": decide(data)})
+            if urlparse(self.path).path == "/local/tools/start":
+                return self._send(start_tool(data.get("id", "")))
             self._send({"error": "not found"}, 404)
         except (ValueError, KeyError) as exc:
             self._send({"error": str(exc)}, 400)

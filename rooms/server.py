@@ -141,6 +141,15 @@ def make_handler(core, remote=False):
                                             a.get("light") in (True, "1", "true", 1), a.get("notify") or ())
             if method == "GET" and path == "/api/deliveries":
                 return core.deliveries(int(a.get("limit", 200)))
+            if path == "/api/tools":
+                if method == "POST":
+                    return core.set_tool(actor, a)
+                return core.tools(actor)
+            if path == "/api/tools/delete" and method == "POST":
+                return core.delete_tool(actor, a.get("id", ""))
+            if path == "/api/tools/link" and method == "POST":
+                return core.link_tool(actor, a.get("id", ""), a.get("room_id", ""),
+                                      on=a.get("on", True) not in (False, 0, "0", "false"))
             if path == "/api/rooms":
                 if method == "POST":
                     return core.create_room(actor, a.get("name", ""), a.get("owner") or None)
@@ -168,6 +177,8 @@ def make_handler(core, remote=False):
                     if method == "PUT" or method == "POST":
                         return core.set_whiteboard(actor, room_id, a.get("text", ""))
                     return core.whiteboard(actor, room_id)
+                if sub == "tools":
+                    return core.room_tools(actor, room_id)
                 if sub == "neighbors":
                     return core.neighbor_boards(actor, room_id)
                 if sub == "post" and method == "POST":

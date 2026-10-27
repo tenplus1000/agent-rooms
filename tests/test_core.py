@@ -79,6 +79,23 @@ class CoreTest(unittest.TestCase):
         got = self.core.post("s-claude", self.room, "@codex-1 再補一題")
         self.assertEqual(got["relayed"], [f"codex-1（{side}）"])
 
+    def test_tools_are_registered_by_the_user_and_linked_to_rooms(self):
+        # 本機工具：使用者登記、接到房間；房裡的人看得到接上的，看不到別間的
+        with self.assertRaises(RoomError):
+            self.core.set_tool("s-cx1", {"name": "x", "category": "dashboard", "url": "http://127.0.0.1:1/"})
+        with self.assertRaises(RoomError):
+            self.core.set_tool(USER, {"name": "x", "category": "別的", "url": "http://127.0.0.1:1/"})
+        kit = self.core.set_tool(USER, {"name": "儀表板", "category": "dashboard", "url": "http://127.0.0.1:8790/"})
+        other = self.other_room()
+        self.core.link_tool(USER, kit["id"], self.room)
+        self.assertEqual([t["name"] for t in self.core.room_tools("s-claude", self.room)], ["儀表板"])
+        self.assertEqual(self.core.room_tools("s-cx1", other), [])
+        self.assertTrue(any(e["type"] == "tool_linked" and not e.get("wake") for e in self.core.history(USER, self.room)))
+        moved = self.core.set_tool(USER, {"id": kit["id"], "pos": [10, 20]})
+        self.assertEqual((moved["pos"], moved["rooms"]), ([10.0, 20.0], [self.room]))
+        self.core.delete_tool(USER, kit["id"])
+        self.assertEqual(self.core.room_tools("s-claude", self.room), [])
+
     def test_rewind_only_moves_back_and_only_for_admins(self):
         self.core.ack("s-claude", self.room, 9)
         with self.assertRaises(RoomError):

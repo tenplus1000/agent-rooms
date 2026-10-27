@@ -15,7 +15,7 @@ import urllib.request
 REPO = Path(__file__).resolve().parents[2]
 EXPECTED = {
     'room_join', 'room_leave', 'room_who', 'room_read', 'room_say',
-    'room_whiteboard_get', 'room_whiteboard_set', 'room_neighbor_boards', 'room_hosts', 'room_threads', 'room_thread_close',
+    'room_whiteboard_get', 'room_whiteboard_set', 'room_neighbor_boards', 'room_hosts', 'room_tools', 'room_tool_map', 'room_threads', 'room_thread_close',
     'room_moves', 'room_dnd', 'task_new', 'task_list', 'task_claim', 'task_submit',
     'task_close', 'task_park', 'task_revise', 'task_drop', 'task_amend',
 }
@@ -112,7 +112,7 @@ def main():
             assert core.poll() is None, (base / 'core.log').read_text()
             try:
                 with urllib.request.urlopen(base_url + '/api/overview', timeout=1) as response:
-                    assert json.load(response)['result'] == {'rooms': [], 'agents': [], 'globals': {}, 'user': {'id': 'user', 'name': 'user'}, 'labels': {'owner': '負責人'}}
+                    assert json.load(response)['result'] == {'rooms': [], 'agents': [], 'globals': {}, 'tools': [], 'tool_kinds': {'dashboard': '儀表板', 'database': '資料庫與檢視介面', 'assistant': '助手工具'}, 'user': {'id': 'user', 'name': 'user'}, 'labels': {'owner': '負責人'}}
                 break
             except (urllib.error.URLError, TimeoutError):
                 if time.monotonic() >= deadline:
@@ -130,12 +130,12 @@ def main():
         assert init['capabilities'] == {'tools': {'listChanged': False}}
         client.write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         listed = client.rpc('tools/list')['tools']
-        assert len(listed) == 22 and {tool['name'] for tool in listed} == EXPECTED
+        assert len(listed) == 24 and {tool['name'] for tool in listed} == EXPECTED
         for tool in listed:
             assert 'session' in tool['inputSchema']['required']
             assert 'as' not in tool['inputSchema']['properties']
         report['tools'] = sorted(EXPECTED)
-        print('PASS initialize -> tools/list: 22 tools; session identity; no listen', flush=True)
+        print('PASS initialize -> tools/list: 24 tools; session identity; no listen', flush=True)
 
         def cli(*args):
             result = subprocess.run([str(REPO / 'bin/room'), *args], cwd=base, env=env,
@@ -166,6 +166,16 @@ def main():
         assert client.tool('room_whiteboard_get', 'mcp-b', room_id=room_id) == '白板\nMCP'
         assert client.tool('room_neighbor_boards') == []          # 沒有接上的房
         assert any(h['room_id'] == room_id for h in client.tool('room_hosts'))
+        # 使用者登記一個本機工具、接到這間房：成員看得到它和它的程式圖
+        def as_user(path, **body):
+            req = urllib.request.Request(base_url + path, data=json.dumps(dict(body, **{'as': 'user'})).encode(),
+                                         method='POST', headers={'Content-Type': 'application/json'})
+            return json.load(urllib.request.urlopen(req))['result']
+        repo = os.path.dirname(os.path.abspath(__file__))
+        kit = as_user('/api/tools', name='測試工具', category='assistant', url='http://127.0.0.1:9', repo=repo)
+        as_user('/api/tools/link', id=kit['id'], room_id=room_id)
+        assert [t['name'] for t in client.tool('room_tools', 'mcp-b')] == ['測試工具']
+        assert '程式圖' in client.tool('room_tool_map', 'mcp-b', tool_id=kit['id'])
         # mcp-b 領任務、交件就算回應了 @，提及的線頭已經自動關掉；再 @ 一次開一條新的來測關閉
         client.tool('room_say', text='再確認一次 @mcp-b')
         threads = client.tool('room_threads')
