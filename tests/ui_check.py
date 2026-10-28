@@ -26,6 +26,14 @@ def decide(d):
     return {"id": d["id"], "status": d["choice"] + "ed"}
 local.decide = decide
 local.tool_status = lambda: {}
+accts = [{"name": "claude", "kind": "claude", "home": "/h/.claude", "warn": 80, "running": 1, "running_names": ["工人A"],
+          "usage": {"five_hours": {"used": 85, "resets_at": "2026-10-28T20:00:00+00:00"}, "week": {"used": 30}}},
+         {"name": "codex", "kind": "codex", "home": "/h/.codex", "warn": 80, "running": 0, "usage": {"error": "這個帳號沒有登入"}}]
+local.accounts_view = lambda force=False: accts
+from rooms import quota
+def upsert(d):
+    accts.append({"name": d["name"], "kind": d["kind"], "home": d["home"], "warn": 80, "running": 0, "usage": {}})
+quota.upsert = upsert
 local.serve(8797)
 """
 data = tempfile.mkdtemp(prefix="rooms-ui-")
@@ -425,6 +433,17 @@ try:
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
     js("localStorage.setItem('rooms.localUrl', JSON.stringify('http://127.0.0.1:8797')); location.reload()"); time.sleep(3)
+    js("refreshAccounts()"); time.sleep(1)
+    check("左邊額度欄列出每個帳號", js("[...document.querySelectorAll('#quota .qcard .nm span')].map(x => x.textContent).join(',')") == "claude,codex")
+    check("到提醒線的帳號標紅", js("document.querySelector('#quota .qcard').classList.contains('hot')"))
+    check("在跑幾個看得到", "在跑 1 個" in (js("document.querySelector('#quota').innerText") or ""))
+    js("[...document.querySelectorAll('#quota .qcard')].pop().click()"); time.sleep(0.5)
+    js("const i = document.querySelectorAll('.dialog input'); i[0].value = '朋友的'; i[1].value = '/h/.codex-f'; [...document.querySelectorAll('.dialog .seg button')][1].click(); [...document.querySelectorAll('.dialog button')].pop().click()")
+    time.sleep(1.2)
+    check("畫面上加帳號", "朋友的" in (js("document.querySelector('#quota').innerText") or ""))
+    js("fitAll()"); time.sleep(0.6)
+    check("全部看得到時房間不被額度欄蓋住", js("document.querySelector('#svg [data-room]').getBoundingClientRect().left") > 160)
+    shot("額度欄")
     check("有建議的點掛數字", js("document.querySelector('[data-session=\"a1\"] .abadge-dot text').textContent") == "2")
     click(*center('[data-session="a1"] circle[fill^="url"]')); time.sleep(0.6)
     check("點的選單有 acc 鈕", js("[...document.querySelectorAll('.pop button')].some(b => b.textContent.startsWith('acc'))"))

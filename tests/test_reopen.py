@@ -55,6 +55,19 @@ class ReopenTest(unittest.TestCase):
                   {"seq": 2, "type": "post", "at": at, "wake": ["s-1"], "from": "s-2"}]
         self.assertEqual([e["seq"] for e in dispatch.calls_for("s-1", events, now)], [1])
 
+    def test_context_used_reads_codex_and_claude_records(self):
+        import tempfile
+        d = Path(tempfile.mkdtemp())
+        (d / "2026" / "10" / "28").mkdir(parents=True)
+        (d / "2026" / "10" / "28" / "rollout-x-th-1.jsonl").write_text(json.dumps({"type": "event_msg", "payload": {
+            "type": "token_count", "info": {"last_token_usage": {"input_tokens": 180000}, "model_context_window": 240000}}}) + "\n")
+        with mock.patch.object(dispatch, "WSL_SESSIONS", str(d)):
+            self.assertAlmostEqual(dispatch.context_used("th-1", "codex"), 75.0)
+        rows = [{"type": "assistant", "message": {"model": "m", "usage": {"input_tokens": 10, "cache_read_input_tokens": 140000}}},
+                {"type": "assistant", "message": {"model": "<synthetic>", "usage": {"input_tokens": 0}}}]
+        (self.home / "projects" / "-work" / "s-5.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+        self.assertAlmostEqual(dispatch.context_used("s-5", "claude"), 70.005)   # 額度用完的假回應不算
+
     def test_transcript_gives_cwd_and_last_permission_mode(self):
         rows = [{"type": "permission-mode", "permissionMode": "default"}, {"type": "user", "cwd": "/srv/a"},
                 {"type": "permission-mode", "permissionMode": "auto"}, {"type": "assistant", "cwd": "/srv/b"}]

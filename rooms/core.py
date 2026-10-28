@@ -1192,6 +1192,24 @@ class Core:
             self._commit()
             return agent["cursor"][room_id]
 
+    def context_alert(self, actor, session, percent):
+        """成員的上下文快滿了（轉送程式量的）：在他的房裡記一筆、叫醒負責人，提醒開新成員接著做。每個成員只提醒一次。"""
+        if actor and not self._admin(actor):
+            raise RoomError("只有本機的轉送程式、使用者或全域角色能發這個提醒", 403)
+        with self.cond:
+            agent = self._agent(session)
+            room_id = agent.get("room_id")
+            if not room_id or agent.get("ctx_alerted") or agent.get("off"):
+                return None
+            owner = self.state["rooms"][room_id].get("owner")
+            agent["ctx_alerted"] = int(percent)
+            text = (f"{agent['name']} 的上下文用到 {int(percent)}%，再做下去會越來越貴、也容易忘前面的事："
+                    f"等它把手上這一段交完，開一個新成員從下一筆接著做（派工句寫清楚從第幾筆開始）。")
+            event = self._emit(room_id, "notice", "", from_name="房間", text=text, about=session,
+                               wake=[owner] if owner and owner != USER and owner != session else [])
+            self._commit()
+            return event
+
     def record_delivery(self, session, action, detail="", light=False, notify=()):
         """每一次叫醒、插話、延後、擋下都記一筆；light=True 時在他所在的房間亮燈。
 

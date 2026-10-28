@@ -34,7 +34,9 @@ class CodexMemberTest(unittest.TestCase):
         thread, _ = dispatch.spawn("/work", "codex", "gpt-5.6-sol", "medium")
         start = next(r for r in self.sent if r["method"] == "thread/start")
         self.assertEqual(start["params"], {"cwd": "/work", "model": "gpt-5.6-sol"})
-        self.assertEqual(dispatch.codex_member(thread), {"model": "gpt-5.6-sol", "effort": "medium"})
+        got = dispatch.codex_member(thread)
+        self.assertEqual((got["model"], got["effort"]), ("gpt-5.6-sol", "medium"))
+        self.assertIn("account", got)                 # 開在哪個帳號也記下（畫面左邊算在跑幾個）
 
     def test_unknown_model_or_effort_is_refused_before_opening(self):
         for model, effort in (("gpt-9", None), ("gpt-5.6-sol", "ultra")):
@@ -42,9 +44,10 @@ class CodexMemberTest(unittest.TestCase):
                 dispatch.spawn("/work", "codex", model, effort)
         self.assertFalse(any(r["method"] == "thread/start" for r in self.sent))
 
-    def test_without_model_nothing_is_recorded(self):
+    def test_without_model_only_the_account_is_recorded(self):
         thread, _ = dispatch.spawn("/work", "codex")
-        self.assertEqual(dispatch.codex_member(thread), {})
+        got = dispatch.codex_member(thread)
+        self.assertEqual((got.get("model"), got.get("effort")), (None, None))   # 沒指定模型就不帶，照帳號設定
 
 
 

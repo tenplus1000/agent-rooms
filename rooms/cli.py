@@ -18,6 +18,7 @@ import urllib.request
 
 from rooms.identity import OWNER_LABEL, REOPEN_MARK, USER, USER_NAME, local_time
 
+SPAWN_WARN = int(os.environ.get("ROOMS_SPAWN_WARN", "2") or 2)   # 同帳號已經有幾個在跑就提醒（不擋）
 TOOL_KINDS = {"dashboard": "儀表板", "database": "資料庫與檢視介面", "assistant": "助手工具"}
 
 USER_FLAG = [f"--{USER}"] if USER != "user" else []   # 例如 --alex：使用者的 id 也能當旗標
@@ -93,6 +94,8 @@ def line_for(event, room_name):
         room_name = room_name.get(event["room_id"], event["room_id"])
     head = f"【房間 {room_name}（{event['room_id']}）｜來自 {event['from_name']}】"
     kind = event["type"]
+    if kind == "notice":
+        return head + event["text"]
     if kind == "backlog":
         return head + (f"在這之前還有 {event['count']} 則較早的紀錄沒有放進來（都看得到）："
                        f"要看用 read --since {event['since']}（Codex 用 room_read，since={event['since']}）")
@@ -169,6 +172,7 @@ def acc_session(session):
 RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
 - 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@{user_id} 找 {user}）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。訊息裡的〔附件〕是檔案在這台機器上的路徑，直接讀；要附檔用 `say \"...\" --file <路徑>`。
+- 開成員照 {user} 的原則：一次一兩個，照順序一段做完再派下一段；開之前用 `quota` 看帳號額度，5 小時額度到 80% 先停、問 {user}（他說快重置了可以用掉才放寬）；成員上下文快滿時房間會提醒你，等它交完這段就開新成員，派工句寫清楚從第幾筆接著做。
 - {owner_label}另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的成員（背景跑、不用 {user} 開視窗；可加 `--model`、`--effort` 只套在這個成員）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）；`hosts` 看各房的{owner_label}，`say` 裡 @別房{owner_label}的名字（或直接 @房號）會送到他的房間、叫醒他，用來跟別房協調。
 - `board` 會一起列出畫面上跟這間接上的房的白板：看得到，只能改自己的。
 - 跑很久的背景工作（排程、batch）要做完再接手：在腳本最後用 `say "@{name} 做完了…"`（@ 你自己），房間會在做完時叫醒你。
@@ -194,7 +198,7 @@ RESIDENT_RULES = """你是 {user} 的常駐代理，在房間工具裡是全域�
 
 CODEX_RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
-- 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@{user_id} 找 {user}）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板（`room_neighbor_boards` 看畫面上接上的房的白板，只能看）、`room_tools` 看這間房接上的本機工具（{user} 說「房間接的那個」就是指這些，`room_tool_map` 看它的程式圖）、`room_hosts` 看各房{owner_label}（{owner_label}在 `room_say` 裡 @別房{owner_label}會送到他的房間）、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。跑很久的背景工作要做完再接手：在腳本最後 room_say "@{name} …"（@ 你自己），房間會在做完時叫醒你。`room_read` 讀到的訊息有 files 時，裡面的 path 是附件在這台機器上的位置，直接讀。
+- 用 MCP 工具 agent-rooms 跟房間說話（不要用 shell 指令，你的沙盒連不到房間），每個工具都帶 session="{session}"：`room_say` 發言（@名字 點人，@{user_id} 找 {user}）、`room_read` 看紀錄、`room_who` 看成員、`room_whiteboard_get` 看白板（`room_neighbor_boards` 看畫面上接上的房的白板，只能看）、`room_tools` 看這間房接上的本機工具（{user} 說「房間接的那個」就是指這些，`room_tool_map` 看它的程式圖）、`room_hosts` 看各房{owner_label}（{owner_label}開成員一次一兩個、照順序做；成員上下文快滿房間會提醒換人）（{owner_label}在 `room_say` 裡 @別房{owner_label}會送到他的房間）、`task_list`／`task_claim`／`task_submit`。交件的 note 寫：交了什麼、做了什麼、怎麼驗證的。跑很久的背景工作要做完再接手：在腳本最後 room_say "@{name} …"（@ 你自己），房間會在做完時叫醒你。`room_read` 讀到的訊息有 files 時，裡面的 path 是附件在這台機器上的位置，直接讀。
 {maintainer_line}- 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
 
@@ -469,6 +473,53 @@ def show(result):
     print(json.dumps(result, ensure_ascii=False, indent=1))
 
 
+def accounts_now():
+    """各帳號現在的額度與在跑幾個（先問本機小幫手，它有快取；問不到就自己讀）。"""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:8777/local/accounts",
+                                     headers={"X-Rooms-Local": "1", "Origin": "http://localhost:8775"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        from rooms import local
+        return local.accounts_view()
+
+
+def spawn_notes(room, name, account, home, claude, model):
+    """開成員時給主持看的提醒（不擋）：使用者 的原則是一次一兩個、額度到提醒線先停、名字別互相是開頭。"""
+    from rooms import quota
+    notes = []
+    rows = {r["name"]: r for r in accounts_now()}
+    row = rows.get(account) or {}
+    u = row.get("usage") or {}
+    if row:
+        notes.append("帳號額度：" + quota.line(row))
+    running = row.get("running", 0)          # 不含剛開的這個（它還沒進房時算的）
+    if running >= SPAWN_WARN:
+        notes.append(f"⚠ {account} 已經有 {running} 個成員在跑（{'、'.join(row.get('running_names', []))}）。"
+                     f"{USER_NAME} 的原則是一次一兩個、照順序一段做完再派下一段；確定要並行再開")
+    if ((u.get("five_hours") or {}).get("used") or 0) >= row.get("warn", quota.WARN):
+        notes.append(f"⚠ {account} 的 5 小時額度已到提醒線（{row.get('warn', quota.WARN)}%）：{USER_NAME} 說到這裡要停，先問他")
+    if not model:
+        if claude:
+            notes.append("模型：沒指定 --model，用的是這個 Claude 帳號的預設（帳號預設可能是 sonnet，評分這類要指定）")
+        else:
+            try:
+                import re
+                cfg = open(os.path.join(home, "config.toml"), encoding="utf-8").read()
+                m = re.search(r'^model\s*=\s*"([^"]+)"', cfg, re.M)
+                notes.append(f"模型：沒指定 --model，用帳號設定的 {m.group(1) if m else '預設模型'}")
+            except OSError:
+                notes.append("模型：沒指定 --model，用帳號設定的預設模型")
+    else:
+        notes.append(f"模型：{model}")
+    others = [m["name"] for m in room["members"] if m["name"] != name]
+    clash = [o for o in others if o.startswith(name) or name.startswith(o)]
+    if clash:
+        notes.append(f"⚠ 名字 {name} 跟 {'、'.join(clash)} 一個是另一個的開頭，@ 時判官容易搞混，建議換個名字")
+    return notes
+
+
 def spawn(actor, room_id, name, role, text, cwd, account=None, model=None, effort=None, mode=None):
     """開新的 Codex 對話（帳號是 Claude 帳號就開 Claude 成員） → 登記成房間開的成員 → 進房 → 寫在做什麼 → @ 他發第一則訊息。
 
@@ -495,8 +546,13 @@ def spawn(actor, room_id, name, role, text, cwd, account=None, model=None, effor
     call("POST", "/api/role", actor, session=thread_id, role=role)
     posted = call("POST", f"/api/rooms/{room_id}/post", actor, text=f"@{name} {text}")
     attach = dispatch.claude_member_hint(thread_id, dispatch.claude_member(thread_id)) if claude else dispatch.resume_hint(thread_id, home)
-    show({"spawned": thread_id, "name": name, "account": account if claude else dispatch.account_name(home),
-          "cwd": os.path.abspath(cwd), "attach": attach, "post": posted})
+    acc = account if claude else dispatch.account_name(home)
+    try:
+        notes = spawn_notes(room, name, acc, home, claude, model)
+    except Exception as error:               # 讀不到額度不影響開成員
+        notes = [f"（讀不到帳號額度：{error}）"]
+    show({"spawned": thread_id, "name": name, "account": acc,
+          "cwd": os.path.abspath(cwd), "attach": attach, "post": posted, "notes": notes})
 
 
 def main(argv=None):
@@ -562,6 +618,7 @@ def main(argv=None):
     s.add_argument("--every", action="store_true", help="每個事件都回（預設只在被 @、任務跟你有關時才回，背景一起帶上）")
     s = sub.add_parser("hook", help="給 Claude／Codex 的 hook 用：stdin 讀 hook 的 JSON，有房間訊息就注入")
     sub.add_parser("overview")
+    sub.add_parser("quota", help="這台機器上每個帳號現在的 5 小時／7 天額度、在跑幾個成員（開成員前先看）")
     sub.add_parser("local", help="本機小幫手：房間畫面接 acc、判斷層的建議（綁 127.0.0.1，見 rooms/local.py）")
 
     t = sub.add_parser("task").add_subparsers(dest="action", required=True)
@@ -586,7 +643,12 @@ def main(argv=None):
     if a.cmd == "local":
         from rooms import local
         return local.serve()
-    if not actor and a.cmd not in ("overview",):
+    if a.cmd == "quota":
+        from rooms import quota
+        for row in accounts_now():
+            print(quota.line(row) + (f"　在跑 {row['running']} 個：{'、'.join(row['running_names'])}" if row.get("running") else ""))
+        return
+    if not actor and a.cmd not in ("overview", "quota"):
         sys.exit("要帶 --session <自己的 session id>，或 --user")
 
     if a.cmd == "register":

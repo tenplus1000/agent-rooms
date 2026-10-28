@@ -111,6 +111,15 @@ class CoreTest(unittest.TestCase):
         with self.assertRaises(RoomError):
             self.core.read_file(USER, f"{self.room}/../../state.json")
 
+    def test_context_alert_wakes_the_owner_once(self):
+        other = self.other_room()                                        # codex-1 是負責人，codex-2 是成員
+        got = self.core.context_alert("", "s-cx2", 73)
+        self.assertEqual((got["type"], got["wake"]), ("notice", ["s-cx1"]))
+        self.assertIn("73%", got["text"])
+        self.assertIsNone(self.core.context_alert("", "s-cx2", 80))     # 同一個成員只提醒一次
+        with self.assertRaises(RoomError):
+            self.core.context_alert("s-cx2", "s-cx2", 90)                # 成員自己不能發
+
     def test_rewind_only_moves_back_and_only_for_admins(self):
         self.core.ack("s-claude", self.room, 9)
         with self.assertRaises(RoomError):

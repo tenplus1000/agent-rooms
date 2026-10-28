@@ -30,6 +30,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 from rooms import paths
 from rooms.identity import OWNER_LABEL, REOPEN_MARK, USER, USER_NAME
@@ -78,6 +79,25 @@ for _entry in (os.environ.get("ROOMS_CLAUDE_HOMES", "").strip() or "~/.claude").
         _path = os.path.expanduser(_path)
         CLAUDE_NAMES[_name or os.path.basename(_path)] = _path
 CLAUDE_MEMBERS = os.path.expanduser("~/.local/state/agent-rooms/claude-members")
+
+
+def refresh_accounts():
+    """畫面上加的帳號（rooms/quota.py 的清單）併進來：spawn --account 用得到。只加不減，環境變數設的照舊在。"""
+    try:
+        from rooms import quota
+        rows = quota.accounts()
+    except Exception:
+        return
+    for r in rows:
+        home = os.path.expanduser(r.get("home", ""))
+        if r.get("kind") == "codex" and home and home not in NAMES:
+            NAMES[home] = r["name"]
+            ACCOUNTS.append(home)
+        elif r.get("kind") == "claude" and home and r["name"] not in CLAUDE_NAMES:
+            CLAUDE_NAMES[r["name"]] = home
+
+
+refresh_accounts()
 REOPEN_FRESH = 600        # 只為這段時間內真的有人找它（發言叫醒它）開視窗；進房、換主持這類事件和舊的積壓不算
 SELF_RETRY = 300          # @自己 沒叫醒：每 5 分鐘再試
 SELF_TRIES = 3            # 總共試幾次
@@ -143,17 +163,19 @@ def _start_daemon(home):
 def _has_quota(home):
     """這個帳號現在還能跑嗎？查不到就當可以（讓 daemon 自己回錯）。"""
     try:
-        if not QUOTA_HELPER:
-            return True
-        if QUOTA_HELPER not in sys.path:
-            sys.path.append(QUOTA_HELPER)
-        import codexquota
-        info = codexquota.read(home)
+        if QUOTA_HELPER:
+            if QUOTA_HELPER not in sys.path:
+                sys.path.append(QUOTA_HELPER)
+            import codexquota
+            info = codexquota.read(home)
+        else:
+            from rooms import quota         # 沒有另外的額度工具：用房間自己的（畫面左邊額度欄同一份）
+            info = quota.usage({"kind": "codex", "home": home})
     except Exception:
         return True
     if info.get("error"):
         return True
-    return all((w or {}).get("used", 0) < 100 for w in (info.get("five_hours"), info.get("week")))
+    return all(((w or {}).get("used") or 0) < 100 for w in (info.get("five_hours"), info.get("week")))
 
 
 def locate(thread_id):
@@ -214,6 +236,7 @@ def spawn(cwd, account=None, model=None, effort=None):
     回 (thread id, 帳號資料夾)；開不成丟 RuntimeError。model／effort 指定了就只套在這個成員（開對話與之後每一輪），
     不改帳號的 config.toml；沒指定照帳號設定。核准改成 never：沒有視窗就沒人能按核准，要核准的指令直接失敗、不會卡住。
     """
+    refresh_accounts()
     by_name = {account_name(h): h for h in ACCOUNTS}
     if account:
         if account not in by_name:
@@ -234,10 +257,10 @@ def spawn(cwd, account=None, model=None, effort=None):
                 continue
         got, error = adapter("cli", _sock(home), {"method": "thread/start", "params": dict(cwd=cwd, **({"model": model} if model else {}))})
         if not error:
-            if model or effort:
-                os.makedirs(CODEX_MEMBERS, exist_ok=True)
-                with open(os.path.join(CODEX_MEMBERS, got["threadId"] + ".json"), "w", encoding="utf-8") as fh:
-                    json.dump({"model": model, "effort": effort}, fh)
+            # 每個成員都記下開在哪個帳號（畫面上算每個帳號有幾個在跑）；model／effort 指定了也一起記
+            os.makedirs(CODEX_MEMBERS, exist_ok=True)
+            with open(os.path.join(CODEX_MEMBERS, got["threadId"] + ".json"), "w", encoding="utf-8") as fh:
+                json.dump({"model": model, "effort": effort, "account": account_name(home), "home": home}, fh)
             return got["threadId"], home
         errors.append(f"{account_name(home)}：{error}")
     raise RuntimeError("開不了新的 Codex 對話：" + "；".join(errors))
@@ -882,6 +905,70 @@ def own_objective(session):
     return ""
 
 
+CONTEXT_WARN = int(os.environ.get("ROOMS_CONTEXT_WARN", "70") or 70)   # 成員上下文用到幾 % 就提醒主持換人
+CLAUDE_CONTEXT = int(os.environ.get("ROOMS_CLAUDE_CONTEXT", "200000") or 200000)
+
+
+def _tail_rows(path, size=400_000):
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - size))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue
+    return rows
+
+
+def context_used(session, kind):
+    """這個成員最近一次呼叫用掉多少上下文（%）；讀不到回 None。
+    Codex：rollout 最後一則 token_count 的 last_token_usage.input_tokens／model_context_window。
+    Claude：對話紀錄最後一則回應的輸入（含快取）；視窗預設 20 萬，用量超過就當成 100 萬的。"""
+    if kind == "codex":
+        found = glob.glob(os.path.join(WSL_SESSIONS, "*", "*", "*", f"*{session}*.jsonl"))
+        for row in reversed(_tail_rows(found[0]) if found else []):
+            info = (row.get("payload") or {}).get("info") if (row.get("payload") or {}).get("type") == "token_count" else None
+            if info and info.get("model_context_window") and info.get("last_token_usage"):
+                return 100 * info["last_token_usage"]["input_tokens"] / info["model_context_window"]
+        return None
+    found = claude_transcript(session)
+    for row in reversed(_tail_rows(found[0]) if found else []):
+        msg = row.get("message") or {}
+        usage = msg.get("usage") if row.get("type") == "assistant" and msg.get("model") != "<synthetic>" else None   # 額度用完那種假回應不算
+        if usage:
+            used = usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+            window = CLAUDE_CONTEXT if used <= CLAUDE_CONTEXT else 1_000_000
+            return 100 * used / window
+    return None
+
+
+def context_loop():
+    """房間開的成員（背景跑的）上下文快滿時，提醒他房間的負責人開新成員接著做（核心那邊每個成員只提醒一次）。"""
+    while True:
+        try:
+            members = {Path(f).stem: "codex" for f in glob.glob(os.path.join(CODEX_MEMBERS, "*.json"))}
+            members.update({Path(f).stem: "claude" for f in glob.glob(os.path.join(CLAUDE_MEMBERS, "*.json"))
+                            if Path(f).stem != "quota"})
+            for a in call("GET", "/api/overview")["agents"]:
+                kind = members.get(a["session"])
+                if not kind or not a.get("room_id") or a.get("off"):
+                    continue
+                pct = context_used(a["session"], kind)
+                if pct is not None and pct >= CONTEXT_WARN:
+                    got = call("POST", "/api/context_alert", session=a["session"], percent=round(pct))
+                    if got:
+                        log(a["session"], "上下文快滿，提醒負責人換人", f"{pct:.0f}%")
+        except Exception as error:
+            log("context", "量上下文時出錯", error)
+        time.sleep(120)
+
+
 def hint_loop():
     """下線、還沒收起來的對話：帶著主機上才有的證據（目標、對話最後一段）請核心問判官該不該收起來。"""
     while True:
@@ -904,6 +991,7 @@ def hint_loop():
 def main():
     workers = {}
     threading.Thread(target=hint_loop, daemon=True).start()
+    threading.Thread(target=context_loop, daemon=True).start()
     log("轉送程式啟動，核心", BASE)
     while True:
         try:

@@ -226,6 +226,39 @@ def tool_map(tool_id):
     return {"id": tool_id, "path": str(path), "text": text}
 
 
+# ── 帳號額度：畫面左邊的額度欄（rooms/quota.py 讀；帳號清單是這台機器自己的，可以從畫面加） ──
+
+def member_accounts():
+    """{session: 帳號名}：房間開的成員各自開在哪個帳號（記在成員檔裡）。"""
+    out = {}
+    base = Path(os.path.expanduser("~/.local/state/agent-rooms"))
+    for sub in ("codex-members", "claude-members"):
+        for f in (base / sub).glob("*.json"):
+            try:
+                acc = json.loads(f.read_text(encoding="utf-8")).get("account")
+            except (OSError, ValueError):
+                continue
+            if acc:
+                out[f.stem] = acc
+    return out
+
+
+def accounts_view(force=False):
+    from rooms import quota
+    from rooms.identity import USER
+    rows = quota.all_usage(force)
+    try:
+        with urllib.request.urlopen(f"{CORE}/api/overview?as={USER}", timeout=5) as resp:
+            agents = json.loads(resp.read().decode("utf-8"))["result"]["agents"]
+    except Exception:
+        agents = []
+    where = member_accounts()
+    for row in rows:
+        names = [a["name"] for a in agents if where.get(a["session"]) == row["name"] and a.get("room_id") and not a.get("off")]
+        row.update(running=len(names), running_names=names)
+    return rows
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
@@ -278,6 +311,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(tool_status())
             if url.path == "/local/tools/map":
                 return self._send(tool_map(q.get("id", "")))
+            if url.path == "/local/accounts":
+                return self._send(accounts_view(q.get("force") == "1"))
             if url.path == "/local/badges":
                 return self._send(badges([s for s in q.get("sids", "").split(",") if s]))
             self._send({"error": "not found"}, 404)
@@ -293,6 +328,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send({"ok": True, "result": decide(data)})
             if urlparse(self.path).path == "/local/tools/start":
                 return self._send(start_tool(data.get("id", "")))
+            if urlparse(self.path).path == "/local/accounts":
+                from rooms import quota
+                quota.upsert(data)
+                return self._send(accounts_view())
+            if urlparse(self.path).path == "/local/accounts/remove":
+                from rooms import quota
+                quota.remove(data.get("name", ""))
+                return self._send(accounts_view())
             if urlparse(self.path).path == "/local/tools/stop":
                 return self._send(stop_tool(data.get("id", "")))
             if urlparse(self.path).path == "/local/tools/restart":

@@ -95,6 +95,8 @@ def make_handler(core, remote=False):
                 if a.get("keep"):
                     return core.keep_shelve_hint(actor, a["session"])
                 return core.judge_shelve(actor, a["session"], a.get("evidence") or {}, a.get("key", ""))
+            if method == "POST" and path == "/api/context_alert":
+                return core.context_alert(actor, a["session"], a.get("percent", 0))
             if method == "POST" and path == "/api/rewind":
                 return core.rewind(actor, a["session"], a["room_id"], a.get("seq", 0))
             if method == "GET" and path == "/api/hosts":

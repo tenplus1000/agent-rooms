@@ -84,6 +84,21 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 #toolpane .body { flex: 1; overflow: auto; padding: 10px 12px; }
 #toolpane pre { white-space: pre-wrap; font-size: 12px; margin: 0; }
 .seg { display: flex; gap: 6px; margin-bottom: 10px; }
+#quota { position: fixed; left: 8px; top: 54px; width: 150px; z-index: 16; display: none; flex-direction: column; gap: 6px; }
+#quota .qh { font-size: 10px; color: var(--dim); display: flex; justify-content: space-between; align-items: center; }
+#quota .qh b { cursor: pointer; font-weight: 400; }
+.qcard { background: rgba(20,24,31,0.88); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; cursor: pointer; font-size: 11px; }
+.qcard:hover { border-color: var(--accent); }
+.qcard .nm { display: flex; justify-content: space-between; font-weight: 600; font-size: 12px; margin-bottom: 3px; }
+.qcard .nm small { color: var(--dim); font-weight: 400; }
+.qcard .row { display: flex; align-items: center; gap: 5px; margin-top: 2px; color: var(--dim); }
+.qcard .row span:first-child { width: 22px; }
+.qcard .bar { flex: 1; height: 5px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+.qcard .bar i { display: block; height: 100%; border-radius: 3px; }
+.qcard .pct { width: 30px; text-align: right; color: var(--text); }
+.qcard .err { color: var(--warn); margin-top: 2px; }
+.qcard .run { color: var(--dim); margin-top: 3px; }
+.qcard.hot { border-color: #f47067; }
 #attach { position: fixed; left: 190px; right: 100px; bottom: 98px; display: none; gap: 6px; flex-wrap: wrap; z-index: 21; }
 #attach .chip { display: flex; align-items: center; gap: 6px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
   padding: 3px 6px; font-size: 12px; max-width: 260px; }
@@ -192,6 +207,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 <div id="roombar"></div>
 <div id="marquee"></div>
 <div id="tooldock"></div>
+<div id="quota"></div>
 <div id="toolpane"></div>
 <div id="bar">
   <div id="target"><span class="k">送到</span><span class="v" id="targetName">—</span></div>
@@ -238,9 +254,11 @@ function fitAll() {
   const xs = [], ys = [];
   list.forEach((r, i) => { const [x, y] = roomPos(r, i); xs.push(x, x + (W + D) * COS); ys.push(y - 90, y + H + (W + D) * SIN + 40); });
   const box = $("stage").getBoundingClientRect();
+  // 左邊額度欄、右邊工具小球佔掉的寬度不放房間
+  const left = $("quota").style.display === "flex" ? 170 : 0, right = 80;
   const w = Math.max(...xs) - Math.min(...xs) + 40, h = Math.max(...ys) - Math.min(...ys) + 40;
-  const k = Math.min(1.4, Math.max(0.25, Math.min(box.width / w, box.height / h)));
-  S.view = { x: -Math.min(...xs) * k + 20, y: -Math.min(...ys) * k + 10, k };
+  const k = Math.min(1.4, Math.max(0.25, Math.min((box.width - left - right) / w, box.height / h)));
+  S.view = { x: -Math.min(...xs) * k + 20 + left, y: -Math.min(...ys) * k + 10, k };
   applyView();
 }
 function setupView() {
@@ -685,7 +703,7 @@ function msgEl(e) {
   const words = { join: "進了房間", leave: "離開房間", whiteboard: e.neighbor ? `改了隔壁 ${e.neighbor_name} 的白板` : "改了白板", off: "下線了", on: "回到線上",
     room_created: "開了這間房", room_renamed: `把房名改成 ${e.name}`, owner: `把${OWNER()}換成 ${e.owner_name}`,
     linked: `把這間跟 ${e.other_name}（${e.other}）接上了，共用白板`, unlinked: `把這間跟 ${e.other_name}（${e.other}）拉開了`,
-    tool_linked: `把本機工具 ${e.tool_name} 接到這間房`, tool_unlinked: `把本機工具 ${e.tool_name} 從這間房拿掉`,
+    notice: e.text, tool_linked: `把本機工具 ${e.tool_name} 接到這間房`, tool_unlinked: `把本機工具 ${e.tool_name} 從這間房拿掉`,
     paused: e.text, delivery: `〔送不到〕${e.detail || ""}`, task: `任務 ${e.task_id} ${e.action}：${e.objective || ""}` };
   return el("div", { class: "msg sys" }, el("span", { class: "body", text: `${at}　${e.from_name} ${words[e.type] || e.type}` }));
 }
@@ -1142,6 +1160,86 @@ async function accPanel(m) {
   pushLayer(() => layer.remove());
 }
 
+// ── 帳號額度：左邊一欄（本機小幫手讀；帳號清單是這台機器自己的，可以加、改、刪）──────────
+S.accounts = null;
+async function refreshAccounts(force) {
+  if (!S.local) return;
+  try { S.accounts = await local("GET", "/local/accounts", force ? { force: "1" } : {}); drawQuota(); } catch (e) {}
+}
+function drawQuota() {
+  const box = $("quota"); box.replaceChildren();
+  if (!S.accounts) { box.style.display = "none"; return; }
+  box.style.display = "flex";
+  box.append(el("div", { class: "qh" }, el("span", { text: "帳號額度" }),
+    el("b", { text: "↻", title: "現在重查", on: { click: () => refreshAccounts(true) } })));
+  for (const a of S.accounts) {
+    const u = a.usage || {}, warn = a.warn || 80;
+    const row = (label, w) => {
+      const used = w && typeof w.used === "number" ? w.used : null;
+      const color = used === null ? "var(--line)" : used >= warn ? "#f47067" : used >= warn - 20 ? "#f0b72f" : "#56d364";
+      return el("div", { class: "row", title: w && w.resets_at ? `${label}：${new Date(w.resets_at).toLocaleString()} 重置` : label },
+        el("span", { text: label }), el("div", { class: "bar" }, el("i", { style: `width:${used || 0}%;background:${color}` })),
+        el("span", { class: "pct", text: used === null ? "?" : Math.round(used) + "%" }));
+    };
+    const hot = ((u.five_hours || {}).used || 0) >= warn;
+    const card = el("div", { class: "qcard" + (hot ? " hot" : ""), title: `${a.home}\n提醒線 ${warn}%` },
+      el("div", { class: "nm" }, el("span", { text: a.name }), el("small", { text: a.kind === "codex" ? "Codex" : "Claude" })),
+      u.error ? el("div", { class: "err", text: u.error }) : null,
+      u.error ? null : row("5h", u.five_hours), u.error ? null : row("7天", u.week),
+      a.running ? el("div", { class: "run", title: (a.running_names || []).join("、"), text: `在跑 ${a.running} 個` }) : null);
+    card.addEventListener("click", e => accountMenu(a, e.clientX, e.clientY));
+    box.append(card);
+  }
+  const add = el("div", { class: "qcard", style: "text-align:center;color:var(--dim)", text: "＋ 加帳號" });
+  add.addEventListener("click", () => accountForm());
+  box.append(add);
+}
+function accountMenu(a, x, y) {
+  const pop = el("div", { class: "pop", style: `left:${Math.min(x, innerWidth - 260)}px;top:${Math.min(y, innerHeight - 160)}px` },
+    el("div", { class: "name", text: `${a.name}（${a.kind === "codex" ? "Codex" : "Claude"}）` }),
+    el("div", { class: "sub", text: a.home }),
+    el("div", { class: "acts" },
+      el("button", { text: "改", on: { click: () => { closeTop(); accountForm(a); } } }),
+      el("button", { text: "拿掉", class: "danger", on: { click: async () => { closeTop();
+        if (await dialog({ title: `從清單拿掉 ${a.name}？`, text: "只是不在這裡顯示、不給成員用，帳號本身不受影響。", ok: "拿掉", danger: true })) {
+          try { S.accounts = await local("POST", "/local/accounts/remove", { name: a.name }); drawQuota(); } catch (e) { toast(e.message); }
+        } } } })));
+  const layer = el("div", { style: "position:fixed;inset:0;z-index:39" });
+  layer.addEventListener("pointerdown", () => closeTop());
+  document.body.append(layer, pop);
+  pushLayer(() => { pop.remove(); layer.remove(); });
+}
+function accountForm(a) {
+  let kind = a ? a.kind : "claude";
+  const box = el("div", { class: "dialog" }, el("h3", { text: a ? `改 ${a.name}` : "加一個帳號" }));
+  const seg = el("div", { class: "seg" });
+  const name = el("input", { placeholder: "名字（例如 claude2）" }), home = el("input", { placeholder: "" }),
+        warn = el("input", { placeholder: "提醒線 %（預設 80）" });
+  const fill = () => {
+    [...seg.children].forEach(b => b.classList.toggle("on", b.dataset.kind === kind));
+    home.placeholder = kind === "codex" ? "帳號資料夾（CODEX_HOME，例如 ~/.codex-work）" : "帳號資料夾（CLAUDE_CONFIG_DIR，例如 ~/.claude-work）";
+  };
+  for (const [k, label] of [["claude", "Claude"], ["codex", "Codex"]])
+    seg.append(el("button", { text: label, "data-kind": k, on: { click: () => { kind = k; fill(); } } }));
+  if (a) { name.value = a.name; home.value = a.home; warn.value = a.warn || ""; }
+  box.append(seg, name, home, warn);
+  fill();
+  const done = () => { layer.remove(); S.layers = S.layers.filter(l => l.id !== id); };
+  box.append(el("div", { class: "row" }, el("button", { text: "取消", on: { click: done } }),
+    el("button", { text: a ? "存" : "加", on: { click: async () => {
+      try {
+        if (a && a.name !== name.value.trim()) await local("POST", "/local/accounts/remove", { name: a.name });
+        S.accounts = await local("POST", "/local/accounts", { name: name.value.trim(), kind, home: home.value.trim(), warn: warn.value.trim() });
+        done(); drawQuota(); refreshAccounts(true);
+      } catch (e) { toast(e.message); }
+    } } })));
+  const layer = el("div", { class: "layer" }, box);
+  layer.addEventListener("pointerdown", e => { if (e.target === layer) done(); });
+  document.body.append(layer);
+  const id = pushLayer(done);
+  name.focus();
+}
+
 // ── 本機工具：右側的小球（儀表板、資料庫與檢視介面、助手工具）──────────────
 // 工具各自獨立跑，房間只登記網址、repo 和怎麼啟動。點兩下開窄窗，窄窗再展開就變成瀏覽器的分頁；拖到房間上就接到那間。
 const TOOL_COLOR = { dashboard: "#5fd3c6", database: "#8fd16a", assistant: "#f0a35e" };
@@ -1542,8 +1640,9 @@ $("fit").addEventListener("click", fitAll);
 setupView();
 refresh();
 setInterval(refresh, 2500);
-refreshLocal().then(refreshToolStatus);
+refreshLocal().then(refreshToolStatus).then(() => refreshAccounts());
 setInterval(() => refreshLocal().then(refreshToolStatus), 30000);
+setInterval(() => refreshAccounts(), 60000);
 addEventListener("resize", () => drawTools());
 </script>
 </body>
