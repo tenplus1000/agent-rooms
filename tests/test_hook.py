@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from unittest import mock
@@ -49,6 +50,27 @@ class AutoRegisterTest(unittest.TestCase):
                 cli.hook()
             wait.assert_called_once_with("s-1")
 
+
+
+class RecordTurnTest(unittest.TestCase):
+    def test_agent_last_words_and_user_reply_are_recorded_locally(self):
+        # 做法點資料集的原料：agent 每一輪最後說的話、使用者下一次開口；房間叫醒那種不算使用者
+        import tempfile
+        from unittest import mock
+        from rooms import cli
+        d = tempfile.mkdtemp()
+        tr = os.path.join(d, "t.jsonl")
+        with open(tr, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "A 或 B？"}]}}) + "\n")
+            fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "x"}]}}) + "\n")
+        with mock.patch.dict(os.environ, {"ROOMS_DATA_DIR": d}):
+            cli.record_turn({"transcript_path": tr}, "Stop", "s-1")
+            cli.record_turn({"prompt": "選 B"}, "UserPromptSubmit", "s-1")
+            cli.record_turn({"prompt": "<task-notification>房間</task-notification>"}, "UserPromptSubmit", "s-1")
+        files = os.listdir(os.path.join(d, "turns"))
+        rows = [json.loads(l) for l in open(os.path.join(d, "turns", files[0]), encoding="utf-8")]
+        self.assertEqual([(r["who"], r["text"]) for r in rows], [("agent", "A 或 B？"), ("user", "選 B")])
+        self.assertEqual(oct(os.stat(os.path.join(d, "turns", files[0])).st_mode & 0o777), "0o600")
 
 if __name__ == "__main__":
     unittest.main()

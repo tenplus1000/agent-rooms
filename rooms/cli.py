@@ -75,11 +75,16 @@ def agent_of(name_or_session):
     return name_or_session
 
 
-def file_path(rel):
-    """附件在這台機器上的位置（核心把檔案存在資料夾的 files/ 底下；資料夾預設是 repo 的 data/）。"""
+def data_dir():
+    """房間資料夾在這台機器上的位置（預設是 repo 的 data/；容器裡的核心掛的是同一個）。"""
     root = os.environ.get("ROOMS_DATA_DIR", "").strip() or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-    return os.path.join(os.path.abspath(root), "files", rel)
+    return os.path.abspath(root)
+
+
+def file_path(rel):
+    """附件在這台機器上的位置（核心把檔案存在資料夾的 files/ 底下）。"""
+    return os.path.join(data_dir(), "files", rel)
 
 
 def line_for(event, room_name):
@@ -194,6 +199,51 @@ CODEX_RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{
 
 
 
+def _last_assistant_text(transcript, tail=400_000):
+    """對話紀錄最後一則 agent 說給人看的話（只讀檔尾，紀錄可能有幾十 MB）。"""
+    try:
+        with open(transcript, "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - tail))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        msg = row.get("message") or {}
+        if row.get("type") == "assistant" and msg.get("role") == "assistant":
+            parts = [c.get("text", "") for c in msg.get("content") or [] if isinstance(c, dict) and c.get("type") == "text"]
+            if any(t.strip() for t in parts):
+                return "\n".join(parts).strip()
+    return ""
+
+
+def record_turn(payload, event_name, session):
+    """做法點資料集的原料（2026-10-28 使用者 要的）：每一輪 agent 最後說的話、使用者下一次開口的原文，照時間記下來。
+    所有本機 Claude 對話都記（不管在不在房間）；只存在這台機器的 <data>/turns/，之後再配對、判有沒有提做法、選了哪個。"""
+    if event_name == "Stop":
+        text, kind = _last_assistant_text(payload.get("transcript_path", "")), "agent"
+    elif event_name == "UserPromptSubmit":
+        text, kind = str(payload.get("prompt", "")), "user"
+        if "<task-notification>" in text[:200] or text.startswith(REOPEN_MARK):
+            return                # 房間叫醒、背景通知，不是使用者開口
+    else:
+        return
+    if not text.strip():
+        return
+    folder = os.path.join(data_dir(), "turns")
+    os.makedirs(folder, exist_ok=True)
+    row = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "session": session, "who": kind, "text": text[:20000],
+           "cwd": payload.get("cwd", ""), "transcript": payload.get("transcript_path", "")}
+    path = os.path.join(folder, time.strftime("%Y-%m") + ".jsonl")
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def hook():
     """hook 不能擋住使用者：任何錯誤都不輸出、exit 0。"""
     try:
@@ -202,6 +252,10 @@ def hook():
         event_name = payload.get("hook_event_name", "UserPromptSubmit")
         if not session or os.environ.get("ROOMS_DISPATCHED"):
             return                # 轉送程式自己跑的那一輪（背景 Claude 成員）：訊息已經帶在 prompt 裡
+        try:
+            record_turn(payload, event_name, session)
+        except Exception:
+            pass                  # 記不了也不能擋住對話
         if event_name in ("Stop", "SessionStart"):
             # Stop：每輪做完就等房間；SessionStart：剛開或 resume、還沒跑過任何一輪的對話也要等得到
             return rewake(session)
