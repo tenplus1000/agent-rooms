@@ -1,5 +1,7 @@
 import os
 os.environ["ROOMS_JUDGE"] = "off"          # 測試不打真的判官；判官另外 mock
+import tempfile as _tmp
+os.environ["ROOMS_DATA_DIR"] = _tmp.mkdtemp(prefix="rooms-test-data-")   # hook 會記對話原料：寫到暫存，不碰真的 data/
 import io
 import json
 import tempfile

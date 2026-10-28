@@ -1,5 +1,7 @@
 import json
 import os
+import tempfile as _tmp
+os.environ["ROOMS_DATA_DIR"] = _tmp.mkdtemp(prefix="rooms-test-data-")   # hook 會記對話原料：寫到暫存，不碰真的 data/
 import unittest
 from unittest import mock
 
