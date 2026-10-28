@@ -488,10 +488,14 @@ class Core:
             self._require_see(actor, room_id)
             return self._room_view(room_id)
 
-    def history(self, actor, room_id, since=0, limit=200):
-        """這間房的事件。後進房的人一樣看得到全部，一次最多 limit 筆（大家同一個上限）。"""
+    def history(self, actor, room_id, since=0, limit=200, before=None):
+        """這間房的事件。後進房的人一樣看得到全部，一次最多 limit 筆（大家同一個上限）。
+        before：拿這一則之前最新的 limit 筆（畫面打開對話先看最新的，往上捲再拿更早的）。"""
         with self.cond:
             self._require_see(actor, room_id)
+            if before is not None:
+                rows = [e for e in self.events.get(room_id, []) if e["seq"] < before]
+                return rows[-limit:] if limit else []
             rows = [e for e in self.events.get(room_id, []) if e["seq"] > since]
             return rows[:limit]
 

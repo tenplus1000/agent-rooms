@@ -177,7 +177,9 @@ def make_handler(core, remote=False):
                 if sub == "name" and method == "POST":
                     return core.rename_room(actor, room_id, a.get("name", ""))
                 if sub == "history":
-                    return core.history(actor, room_id, int(a.get("since", 0)), int(a.get("limit", 200)))
+                    before = a.get("before")
+                    return core.history(actor, room_id, int(a.get("since", 0)), int(a.get("limit", 200)),
+                                        int(before) if before not in (None, "") else None)
                 if sub == "whiteboard":
                     if method == "PUT" or method == "POST":
                         return core.set_whiteboard(actor, room_id, a.get("text", ""))

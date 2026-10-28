@@ -366,13 +366,25 @@ try:
     check("白板框可以編輯", js("!!document.querySelector('.dialog textarea.board-edit')"))
     js("document.querySelector('.dialog textarea').value = '規矩：先讀再做'; [...document.querySelectorAll('.dialog button')].pop().click()"); time.sleep(1.2)
     check("白板存檔寫回核心", call("GET", "/api/rooms/%s/whiteboard" % r1) == "規矩：先讀再做")
+    # 長的對話：打開就停在最新那則，更早的往上捲才拿
+    for k in range(320):
+        call("POST", f"/api/rooms/{r1}/post", text=f"灌水 {k}")
+    js("Object.keys(S.wins).forEach(closeWin)"); time.sleep(0.3)
+    t0 = time.time(); js(f"openWin('{r1}')"); time.sleep(1.2)
+    check("長對話打開就在最下面", "灌水 319" in (js("document.querySelector('.win .log').lastElementChild.innerText") or "")
+          and js("(() => { const l = document.querySelector('.win .log'); return l.scrollTop + l.clientHeight >= l.scrollHeight - 5; })()"))
+    check("上面有更早的紀錄可以拿", "更早的紀錄" in (js("document.querySelector('.win .older') && document.querySelector('.win .older').textContent") or ""))
+    js("document.querySelector('.win .log').scrollTop = 0"); time.sleep(1.5)
+    check("捲到頂就補更早的", js("document.querySelectorAll('.win .log .msg').length") > 160)
+    js("Object.keys(S.wins).forEach(closeWin)"); time.sleep(0.3)
+
     # 附件：貼上的截圖跟訊息一起送，對話視窗裡看得到縮圖
     js(f"S.sel = '{r1}'; S.mode = null; render()")
     js("addFiles([new File([Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='), c => c.charCodeAt(0))], 'image.png', {type: 'image/png'})])")
     time.sleep(0.4)
     check("貼上的截圖先列在輸入框上方", js("document.querySelectorAll('#attach .chip img').length") == 1)
     js("document.getElementById('input').value = '看這張'; send()"); time.sleep(2)
-    hist = call("GET", f"/api/rooms/{r1}/history")
+    hist = call("GET", f"/api/rooms/{r1}/history", before=10**9)
     check("截圖跟訊息一起送出", any(e.get("files") and e.get("text") == "看這張" for e in hist))
     js(f"openWin('{r1}')"); time.sleep(1.5)
     check("對話視窗裡有縮圖", js("(() => { const i = document.querySelector('.win .msg .att img'); return !!i && i.complete && i.naturalWidth > 0; })()"))
@@ -421,7 +433,7 @@ try:
     linked = next(t for t in call("GET", "/api/tools") if t["id"] == kit["id"])["rooms"]
     check("拖到房間上就接上", linked == [r1])
     check("房間底下列出接上的工具", js(f"!!document.querySelector('[data-room-tool=\"{kit['id']}\"]')"))
-    check("房裡記一筆接上工具", any(e["type"] == "tool_linked" for e in call("GET", f"/api/rooms/{r1}/history")))
+    check("房裡記一筆接上工具", any(e["type"] == "tool_linked" for e in call("GET", f"/api/rooms/{r1}/history", before=10**9)))
     click(*center('.tool-ball[title="加一個本機工具"] .orb')); time.sleep(0.6)
     check("加工具照分類先填模板", "8772" in (js("document.querySelectorAll('.dialog input')[1].value") or ""))
     js("const i = document.querySelectorAll('.dialog input'); i[0].value = '測試助手'; [...document.querySelectorAll('.dialog button')].pop().click()"); time.sleep(1.5)
