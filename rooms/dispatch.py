@@ -79,6 +79,8 @@ for _entry in (os.environ.get("ROOMS_CLAUDE_HOMES", "").strip() or "~/.claude").
         CLAUDE_NAMES[_name or os.path.basename(_path)] = _path
 CLAUDE_MEMBERS = os.path.expanduser("~/.local/state/agent-rooms/claude-members")
 REOPEN_FRESH = 600        # 只為這段時間內真的有人找它（發言叫醒它）開視窗；進房、換主持這類事件和舊的積壓不算
+SELF_RETRY = 300          # @自己 沒叫醒：每 5 分鐘再試
+SELF_TRIES = 3            # 總共試幾次
 REOPEN_GAP = 180          # 開過視窗後這段時間內不再開（等它起來、hook 接手）   # 視窗自己握著對話、沒接背景服務：daemon 確定沒收下
 
 
@@ -594,7 +596,8 @@ def calls_for(session, events, now=None):
             at = datetime.datetime.fromisoformat(e["at"]).timestamp()
         except (KeyError, ValueError):
             continue
-        if e.get("type") in ("post", "task") and session in (e.get("wake") or ()) and now - at < REOPEN_FRESH:
+        fresh_for = SELF_RETRY * (SELF_TRIES + 1) if e.get("self_call") else REOPEN_FRESH   # @自己 會重試，放寬
+        if e.get("type") in ("post", "task") and session in (e.get("wake") or ()) and now - at < fresh_for:
             fresh.append(e)
     return fresh
 
@@ -618,6 +621,7 @@ class ClaudeWorker(Worker):
     """替房裡的 Claude 盯著：平常什麼都不做（hook 會處理）；視窗關了又有人找它才開視窗接回。"""
 
     def run(self):
+        self.self_tries = {}
         opened_seq, opened = reopened(self.session)
         while not self.stop:
             try:
@@ -636,10 +640,18 @@ class ClaudeWorker(Worker):
                     time.sleep(15)
                     continue
                 if opened_seq and events[-1]["seq"] <= opened_seq:
-                    # 同一批已經開過一次視窗，沒接起來（被關掉、或沒按確認）：不再一直開，等有新的事再說
-                    self.fail("reopen_failed", "開過視窗接回對話，但它沒有接起來（視窗被關掉、或停在確認畫面）；訊息留著，有新的事再開", events)
-                    time.sleep(60)
-                    continue
+                    # 同一批已經開過一次視窗，沒接起來（被關掉、或沒按確認）：不再一直開，等有新的事再說。
+                    # 例外：@自己（背景排程跑完叫醒自己）每 5 分鐘再試，總共試 3 次
+                    selfish = any(e.get("self_call") and e.get("from") == self.session for e in events)
+                    tries = self.self_tries.get(opened_seq, 1)
+                    if not (selfish and tries < SELF_TRIES and time.time() - opened >= SELF_RETRY):
+                        why = f"叫醒自己試了 {tries} 次都沒接起來，不再送" if selfish and tries >= SELF_TRIES else \
+                            "開過視窗接回對話，但它沒有接起來（視窗被關掉、或停在確認畫面）；訊息留著，有新的事再開"
+                        if not selfish or tries >= SELF_TRIES:
+                            self.fail("reopen_failed", why, events)
+                        time.sleep(60)
+                        continue
+                    self.self_tries[opened_seq] = tries + 1
                 found = claude_transcript(self.session)
                 if not found:
                     time.sleep(60)              # 不在這台的紀錄裡（例如 Windows 桌面版）：交給它那邊的 hook

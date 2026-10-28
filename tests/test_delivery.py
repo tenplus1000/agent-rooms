@@ -75,6 +75,19 @@ class WakeTest(unittest.TestCase):
         self.assertNotIn("a", ask.call_args[0][5])
         self.assertIn("b", ask.call_args[0][5])
 
+    def test_at_self_wakes_yourself_three_times_in_a_row_at_most(self):
+        # 背景排程跑完 @自己：叫醒自己；連續三次中間沒有別人說話，第四次就不叫（免得自己一直轉）
+        for k in range(3):
+            event = self.core.post("s-a", self.room, f"@a 排程 {k} 做完了")
+            self.assertIn("s-a", event["wake"])
+            got = self.core.listen("s-a", wait=0)["events"]
+            self.assertTrue(any(e["seq"] == event["seq"] for e in got))          # 自己的 @自己 會送給自己
+        fourth = self.core.post("s-a", self.room, "@a 又做完了")
+        self.assertNotIn("s-a", fourth["wake"])
+        self.assertIn("notice", fourth)
+        self.core.post("s-b", self.room, "@a 我插一句")                          # 有別人說話：重算
+        self.assertIn("s-a", self.core.post("s-a", self.room, "@a 排程好了")["wake"])
+
     def test_judge_log_points_back_to_the_post(self):
         # 判官紀錄和房間發言靠同一個 call 對上：房名會改、同一人會連發，用時間對不準
         with mock.patch.dict(os.environ, {"ROOMS_JUDGE": "on", "ROOMS_JUDGE_KEY": "k"}), \

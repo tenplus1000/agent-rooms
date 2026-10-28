@@ -64,6 +64,8 @@ def _now():
 # 工具的分類：畫面右側照這三類排，加新工具時照該類的模板填（見 docs/tool-templates.md）
 TOOL_KINDS = {"dashboard": "儀表板", "database": "資料庫與檢視介面", "assistant": "助手工具"}
 
+SELF_WAKES = 3          # 連續被自己叫醒幾次（中間沒有別人的訊息）就不再叫
+
 class Core:
     def __init__(self, data_dir):
         self.data = Path(data_dir)
@@ -801,6 +803,19 @@ class Core:
             members = [m for m in self._members(room_id) if m != actor]
             everyone = any(n.lower() in EVERYONE for n in MENTION.findall(text))
             wake = [m for m in members if everyone or m in mentions]
+            for m in members:
+                self.state["agents"][m].pop("self_wakes", None)        # 有別人講話：叫醒自己的次數重算
+            # @自己：叫醒自己（背景排程跑完時用）。連續三次被自己叫醒、中間沒有別人的訊息，就不再叫，免得自己一直轉
+            self_call = actor != USER and actor in self.state["agents"] and \
+                self.name_of(actor) in MENTION.findall(text)
+            self_note = None
+            if self_call:
+                me = self.state["agents"][actor]
+                if me.get("self_wakes", 0) < SELF_WAKES:
+                    me["self_wakes"] = me.get("self_wakes", 0) + 1
+                else:
+                    self_call = False
+                    self_note = f"已經連續 {SELF_WAKES} 次叫醒自己、中間沒有別人的訊息，這次不叫醒你。"
             desk = room.get("desk")
             if desk and actor != desk and desk not in wake:
                 wake.append(desk)                     # 專屬管道：使用者講的話都是給那個全域角色的
@@ -841,6 +856,9 @@ class Core:
                     wake = []                       # 暫停中：訊息照記，不叫醒人
             held = bool(room.get("paused")) and actor != USER
             extra = {"judged": judged} if judged else {}
+            if self_call and not held:
+                wake.append(actor)
+                extra["self_call"] = True
             if files:
                 extra["files"] = [{k: f.get(k) for k in ("rel", "name", "size", "type")} for f in files]
             event = self._emit(room_id, "post", actor, text=text, mentions=mentions, wake=wake, held=held, **extra)
@@ -863,6 +881,8 @@ class Core:
                 event = dict(event, relayed=relayed)
                 if judge.enabled():
                     self._judge_relay(room_id, actor, text, event["seq"], list(relays.values()))
+            if self_note:
+                return dict(event, notice=self_note)
             if held:
                 # 發話的人要知道：訊息記下了，但沒有人被叫醒
                 return dict(event, notice="房間暫停中：這則已記下，但沒有叫醒任何人；使用者在房裡講一句話才恢復。")
@@ -1076,7 +1096,8 @@ class Core:
         rows = []
         if room_id:
             cursor = agent["cursor"].get(room_id, 0)
-            rows = [e for e in self.events.get(room_id, []) if e["seq"] > cursor and e["from"] != session]
+            rows = [e for e in self.events.get(room_id, []) if e["seq"] > cursor
+                    and (e["from"] != session or session in e.get("wake", ()))]     # 自己的訊息只有 @自己 的才送
         if session in self._globals():
             # 全域角色不用待在房裡：別的房間裡找它的事件（被 @、暫停、送不到……）也算它的
             for other, events in self.events.items():

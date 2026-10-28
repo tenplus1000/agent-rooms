@@ -46,6 +46,15 @@ class ReopenTest(unittest.TestCase):
         events.append({"seq": 5, "type": "post", "at": at(30), "wake": ["s-1"]})
         self.assertEqual([e["seq"] for e in dispatch.calls_for("s-1", events, now)], [5])
 
+    def test_self_call_stays_fresh_while_it_is_retried(self):
+        # @自己 沒叫醒會每 5 分鐘再試，總共 3 次：12 分鐘前的還算數，別人的同樣舊就不算
+        import datetime
+        now = datetime.datetime(2026, 10, 28, tzinfo=datetime.timezone.utc).timestamp()
+        at = datetime.datetime.fromtimestamp(now - 720, datetime.timezone.utc).isoformat()
+        events = [{"seq": 1, "type": "post", "at": at, "wake": ["s-1"], "from": "s-1", "self_call": True},
+                  {"seq": 2, "type": "post", "at": at, "wake": ["s-1"], "from": "s-2"}]
+        self.assertEqual([e["seq"] for e in dispatch.calls_for("s-1", events, now)], [1])
+
     def test_transcript_gives_cwd_and_last_permission_mode(self):
         rows = [{"type": "permission-mode", "permissionMode": "default"}, {"type": "user", "cwd": "/srv/a"},
                 {"type": "permission-mode", "permissionMode": "auto"}, {"type": "assistant", "cwd": "/srv/b"}]
