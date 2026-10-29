@@ -65,7 +65,10 @@ class RecordTurnTest(unittest.TestCase):
         with open(tr, "w", encoding="utf-8") as fh:
             fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "A 或 B？"}]}}) + "\n")
             fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "x"}]}}) + "\n")
-        with mock.patch.dict(os.environ, {"ROOMS_DATA_DIR": d}):
+        with mock.patch.dict(os.environ, {"ROOMS_DATA_DIR": d, "ROOMS_RECORD_TURNS": ""}):
+            cli.record_turn({"prompt": "沒開就不記"}, "UserPromptSubmit", "s-1")
+        self.assertFalse(os.path.exists(os.path.join(d, "turns")))
+        with mock.patch.dict(os.environ, {"ROOMS_DATA_DIR": d, "ROOMS_RECORD_TURNS": "1"}):
             cli.record_turn({"transcript_path": tr}, "Stop", "s-1")
             cli.record_turn({"prompt": "選 B"}, "UserPromptSubmit", "s-1")
             cli.record_turn({"prompt": "<task-notification>房間</task-notification>"}, "UserPromptSubmit", "s-1")

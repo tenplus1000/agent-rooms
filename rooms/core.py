@@ -61,7 +61,7 @@ def _now():
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-# 工具的分類：畫面右側照這三類排，加新工具時照該類的模板填（見 docs/tool-templates.md）
+# 工具的分類：畫面右側照這三類排，加新工具時照該類的模板填（見 contrib/tool-templates.md）
 TOOL_KINDS = {"dashboard": "儀表板", "database": "資料庫與檢視介面", "assistant": "助手工具"}
 
 SELF_WAKES = 3          # 連續被自己叫醒幾次（中間沒有別人的訊息）就不再叫

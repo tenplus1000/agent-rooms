@@ -1296,7 +1296,7 @@ function accountForm(a) {
 // ── 本機工具：右側的小球（儀表板、資料庫與檢視介面、助手工具）──────────────
 // 工具各自獨立跑，房間只登記網址、repo 和怎麼啟動。點兩下開窄窗，窄窗再展開就變成瀏覽器的分頁；拖到房間上就接到那間。
 const TOOL_COLOR = { dashboard: "#5fd3c6", database: "#8fd16a", assistant: "#f0a35e" };
-const TOOL_TEMPLATES = {     // 加新工具時照分類先填好的樣子（怎麼做一個新的見 docs/tool-templates.md）
+const TOOL_TEMPLATES = {     // 加新工具時照分類先填好的樣子（怎麼做一個新的見 contrib/tool-templates.md）
   dashboard: { url: "http://127.0.0.1:8790/", start: "", note: "看數字的頁面，只讀；可以是從別台轉進來的網址" },
   database: { url: "http://127.0.0.1:8773/", start: "python3 tools/server.py --port 8773", note: "唯讀檢視資料，只綁 127.0.0.1" },
   assistant: { url: "http://127.0.0.1:8772/", start: "python3 server.py --port 8772", note: "幫手類網頁工具，只綁 127.0.0.1" },

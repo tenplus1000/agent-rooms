@@ -182,7 +182,7 @@ def locate(thread_id):
     """這個 Codex 對話要怎麼送：回 (種類, socket 或 None, 說明)。找不到回 None。
 
     桌面版 → 桌面轉接器。WSL 的對話 → 先找哪個帳號的 daemon 已經掛著它（有視窗開著就是那個），
-    都沒掛就挑還有額度的帳號；兩個帳號都沒額度回 ("cli", None, 原因)。
+    都沒掛就挑還有額度的帳號；每個帳號都沒額度回 ("cli", None, 原因)。
     """
     if _found(DESKTOP_SESSIONS, thread_id):
         return "desktop", None, "桌面版"
@@ -196,7 +196,7 @@ def locate(thread_id):
     for home in ACCOUNTS:
         if _has_quota(home):
             return "cli", _sock(home), f"{account_name(home)}（還有額度）"
-    return "cli", None, "兩個 Codex 帳號的額度都用完了"
+    return "cli", None, "每個 Codex 帳號的額度都用完了"
 
 
 def account_name(home):

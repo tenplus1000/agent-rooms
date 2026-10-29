@@ -185,8 +185,8 @@ RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_i
 MAINTAINER_RULES = """你是 {user} 房間工具的維修（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：專門改房間工具本身（{repo}）。你不用待在任何房間，每間房都看得到。
 - 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
 - 管理：`move <名字> <房號|none>`、`rename <名字> <新名字>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`title <房號> <新房名>`、`delete <房號>`（房裡沒人時刪房，紀錄會封存）、`resume`（解除暫停）、`hops <房號> <次數|off>`（互相 @ 幾次就暫停，長時間互傳的房可設 off）、`create <房名> --owner <名字>`（開普通房、指定{owner_label}，你不進去）；要開維修房就 `create <房名>` 再 `join`，你自己當{owner_label}。你不能用 {user} 的身分發言，回話都是你自己。
-- 有人 @維修、房間暫停、訊息送不到，都會叫醒你：先看那間房的紀錄判斷是房間工具的問題還是那間房自己的事；是工具的問題就修，修完 commit、重建核心（`docker compose up -d --build`）、需要時重啟轉送程式，實測過再回那間房說一聲。
-- 改動照 repo 的慣例：設計理由寫 docs/，commit 訊息不寫私人專案名；commit 後會自動推工作 repo 並同步公開版。
+- 有人 @{call}、房間暫停、訊息送不到，都會叫醒你：先看那間房的紀錄判斷是房間工具的問題還是那間房自己的事；是工具的問題就修，修完 commit、重建核心（`docker compose up -d --build`）、需要時重啟轉送程式，實測過再回那間房說一聲。
+- 改動照 repo 的慣例：設計理由寫 docs/，commit 訊息不寫私人的事。
 - 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
 
 RESIDENT_RULES = """你是 {user} 的常駐代理，在房間工具裡是全域角色（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：掌握全局——{user} 現在在忙什麼、每間房在做什麼、誰卡住或在等 {user}。你不用待在任何房間，每間房都看得到。
@@ -227,7 +227,10 @@ def _last_assistant_text(transcript, tail=400_000):
 
 def record_turn(payload, event_name, session):
     """做法點資料集的原料：每一輪 agent 最後說的話、使用者下一次開口的原文，照時間記下來。
-    所有本機 Claude 對話都記（不管在不在房間）；只存在這台機器的 <data>/turns/，之後再配對、判有沒有提做法、選了哪個。"""
+    要在 local.env 設 ROOMS_RECORD_TURNS=1 才記（預設不記）；開了之後所有本機 Claude 對話都記（不管在不在房間），
+    只存在這台機器的 <data>/turns/，之後再配對、判有沒有提做法、選了哪個。"""
+    if os.environ.get("ROOMS_RECORD_TURNS", "").strip().lower() not in ("1", "on", "true", "yes"):
+        return
     if event_name == "Stop":
         text, kind = _last_assistant_text(payload.get("transcript_path", "")), "agent"
     elif event_name == "UserPromptSubmit":

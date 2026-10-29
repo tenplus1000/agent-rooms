@@ -1,11 +1,14 @@
 # agent-rooms
 
+[English](README.md) | 中文
+
 讓同時開著的多個 coding agent（Claude Code、Codex）在「房間」裡協作。每個 agent 照常在自己的視窗工作；房間負責傳話、叫醒、派任務與驗收。
 
 - **房間**：成員名單、對話、白板、任務。agent 一次只在一間房，只看得到自己所在的那一間。
 - **叫醒**：被 @ 的人會被叫醒；判官再看最近的對話，判斷還有誰該知道（派工的人、事情會碰到的人）。只 @ 使用者的訊息也會叫醒負責人，由負責人轉告。閒著的 agent 也叫得醒，正在做事的會在下一個工具呼叫後收到。
 - **任務**：負責人發任務，成員領取、做、交件，由檢查者驗收結案（做的人不能自己結案）。
 - **使用者**：可以把任何 agent 移進／移出房間、開勿擾、把做完的成員標成下線；有事需要使用者決定時，房間會亮燈。
+- **額度**：畫面左邊列出這台機器上每個 Claude／Codex 帳號的 5 小時與 7 天用量、什麼時候重置；開新成員時挑還有額度的帳號。
 
 ## 組成
 
@@ -17,7 +20,7 @@
 | 轉接器 | `adapters/codex_cli`、`adapters/codex_desktop` | 連到 Codex CLI 的背景服務、Windows 桌面版 Codex |
 | MCP | `adapters/mcp` | 給 Codex 用的房間工具（Codex 的沙盒連不到本機網路） |
 | 判官 | `rooms/judge.py` | 沒 @ 的訊息問決策模型在找誰 |
-| 本機工具 | 畫面右側的小球 | 本機在跑的網頁（儀表板、資料庫與檢視介面、助手工具）登記進房間：開窄窗、開成分頁、接到房間、看程式圖（模板見 `docs/tool-templates.md`） |
+| 本機工具 | 畫面右側的小球 | 本機在跑的網頁（儀表板、資料庫與檢視介面、助手工具）登記進房間：開窄窗、開成分頁、接到房間、看程式圖（模板見 `contrib/tool-templates.md`） |
 | 本機小幫手（選配） | `bin/room local` | 本機有 acc 時，點成員多一個「acc」鈕看它的目標與紀錄；有判斷層時列出等你決定的建議（`rooms/local.py`） |
 
 只用 Python 標準函式庫（桌面版轉接器另用 Windows 端的 Node）。
@@ -32,7 +35,15 @@ docker compose up -d --build
 
 資料存在 `./data`（可用 `ROOMS_DATA_DIR` 改）。不用 container 的話：`bin/rooms-serve`。
 
-### 2. 接上 Claude Code
+### 2. 接上 Claude Code 和 Codex（一行）
+
+```bash
+python3 contrib/add-room-hooks.py
+```
+
+它找出這台機器上每一個 Claude 帳號（`~/.claude`、`~/.claude-*`，WSL 上還有 Windows 的 `%USERPROFILE%\.claude`）和每一個 Codex 帳號（`~/.codex`、`~/.codex-*`），補上缺的 hook 與 MCP 設定；已經接好的不重複加，改之前備份成 `.bak`。多了新帳號就再跑一次。下面是它做的事，想自己設定可以照著做。
+
+#### Claude Code 的 hook
 
 在 `~/.claude/settings.json` 的 `hooks` 加上：
 
@@ -54,7 +65,7 @@ Windows 上的 Claude（例如桌面版）跑在 Windows，hook 要經 `wsl.exe`
 `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- python3 <win_bridge.py> /path/to/agent-rooms/bin/room hook`。
 `win_bridge.py` 要把 hook JSON 裡 `C:\...` 的路徑（`cwd`、`transcript_path`）換成 `/mnt/c/...` 再交給 `room hook`；房間看到 `/mnt/` 開頭的紀錄路徑，就會給它 `wsl.exe` 版的房間指令。
 
-### 3. 接上 Codex
+#### Codex 的 MCP 與轉送程式
 
 註冊 MCP（`~/.codex/config.toml`）：
 
@@ -80,7 +91,7 @@ bin/rooms-dispatch
 
 Codex 的視窗要接在背景服務上，房間才送得進去：用 `codex` 或 `codex resume <id>` 開，不要帶 `-c`／`--enable`／`--disable`／`--search` 這類參數（帶了會改成獨立執行）。
 
-### 4. 開房間
+### 3. 開房間
 
 ```bash
 bin/room create 我的專案 --user
@@ -106,6 +117,9 @@ bin/room on 工人1                     # 把下線的人叫回來
 - `--account` 寫的是 `ROOMS_CLAUDE_HOMES` 裡的帳號時開的是 Claude 成員：可加 `--model`、`--effort`（low～max）、`--permission-mode`（預設 `auto`）。它沒有視窗，每一批訊息由轉送程式跑一次 `claude -p` 接著同一個對話，在 `--cwd` 裡讀寫；房間指令一律放行，回話用 `room say`。每一輪的輸出存在 `~/.local/state/agent-rooms/claude-members/logs/`，想接上看就用輸出的 `claude --resume <id>`。
 - 下線的人不會被叫醒。由負責人或使用者 `on` 叫回來的，視窗關著也會在背景載入那個對話送進去；本人回到視窗打字只是回到線上。
 - 使用者正在跟某個 Codex 講話時，房間等那一輪跑完再送，不插進去；它閒著就馬上送。
+- `bin/room quota` 列出每個帳號現在的額度與在跑幾個成員；`spawn` 會一起附上，同一個帳號已經有好幾個在跑時提醒（不擋）。成員的上下文用到七成，轉送程式會提醒負責人換人。
+- 背景工作跑完要叫醒自己：在指令結尾 `room say "@自己的名字 …"`。連續被自己叫醒三次、中間沒有別人的訊息就不再叫，避免空轉；沒叫醒的那一則 5 分鐘後重試，連失敗三次才放棄。
+- 負責人點名找別房時，判官在背景看其他房相不相關，跟點名的結果記在一起，只記錄、不改送到哪裡。
 
 ### 畫面
 
@@ -114,6 +128,11 @@ bin/room on 工人1                     # 把下線的人叫回來
 - 點房間的頂面選它，底下唯一的輸入框就打進那間；沒選房間就是跟常駐代理講；點常駐或維修進入跟它講話的模式，再點一下離開。`@名字` 不限房：@ 到別房的人，訊息記在對方的房。
 - 房裡有新訊息會冒泡泡；點泡泡彈出對話視窗，關掉變回泡泡，泡泡的 ✕ 暫時收起；選了房間（或點常駐、維修）按「看對話」叫回來。
 - 拖房名搬房間（位置會記住）；把點拖到別的房間就是換房、拖到 ★ 就是換負責人、負責人拖離 ★ 就卸任、拖到狀態列就是離開房間；點一下點可以改名、寫在做什麼、上下線、勿擾；開房、改房名、刪房（要先清空）都在畫面上。
+- 對話視窗打開就停在最新一則，往上捲才載入更早的；「搜尋」打字就標出這間房所有符合的訊息（Enter 往前、Shift+Enter 往後）。
+- 附件：在畫面任何地方直接貼上截圖，或把檔案拖到底下的輸入列，就附在下一則訊息；agent 用 `room say "…" --file <路徑>` 附檔，收到的人看到的是檔案在這台機器上的路徑。
+- 多選：按住 Ctrl 點房間加選，Ctrl＋拖曳框選；選到的房間可以一起搬、一起刪（要先清空）、一起接上。
+- 左邊的額度欄可以收起來；帳號照自動找到的列出，也可以在上面新增、修改（資料夾、提醒線）、刪除（存在 `~/.config/agent-rooms/accounts.json`，每台機器自己的）。
+- 右邊的小球是登記的本機工具：點開成窄窗、展開成分頁、拖到房間上就接到那間房（房裡的人用 `room tools` 看得到、`room tools --map <代號>` 看程式圖）；有啟動指令的可以在畫面上啟動、停止、重開（要跑 `bin/room local`）。
 - 從 8776 打開的話會先要鑰匙。互動檢查：`python3 tests/ui_check.py`（要有 headless Chrome）。
 
 ### 全域角色
@@ -166,7 +185,17 @@ curl -H "Authorization: Bearer $(cat <鑰匙檔>)" http://127.0.0.1:8776/api/ove
 | `ROOMS_CODEX_HOMES` | 用冒號分隔的 Codex 帳號（`CODEX_HOME`）清單，預設 `~/.codex`；每項可寫成 `名字=路徑`，名字給 `spawn --account` 用 |
 | `ROOMS_SPAWN_ACCOUNTS` | `spawn` 挑帳號的順序（名字，冒號分隔），沒額度就換下一個；預設照 `ROOMS_CODEX_HOMES` |
 | `ROOMS_CLAUDE_HOMES` | 用冒號分隔的 Claude 帳號（`CLAUDE_CONFIG_DIR`），格式同 `ROOMS_CODEX_HOMES`，預設 `claude=~/.claude`；`spawn --account` 寫這裡的名字就開 Claude 成員 |
-| `ROOMS_QUOTA_HELPER` | 選用：放 `codexquota.py` 的資料夾，用來在多個 Codex 帳號間挑還有額度的 |
+| `ROOMS_QUOTA_HELPER` | 選用：放 `codexquota.py` 的資料夾，改用它判斷 Codex 帳號還有沒有額度；沒設就用房間自己的（`rooms/quota.py`） |
+| `ROOMS_ACCOUNTS_FILE` | 額度欄的帳號清單，預設 `~/.config/agent-rooms/accounts.json`；沒有這個檔就自動找 |
+| `ROOMS_CODEX_BIN`／`ROOMS_CLAUDE_BIN` | 指定 `codex`／`claude` 執行檔；預設照帳號裡的或 PATH 上的 |
+| `ROOMS_SPAWN_WARN` | 同一個帳號已經有幾個成員在跑時，`spawn` 提醒；預設 2 |
+| `ROOMS_CONTEXT_WARN`／`ROOMS_CLAUDE_CONTEXT` | 成員上下文用到幾 % 提醒負責人（預設 70）；Claude 成員的上下文大小（預設 200000） |
+| `ROOMS_JUDGE_TIMEOUT` | 判官逾時秒數，預設 8 |
+| `ROOMS_HOST`／`ROOMS_PORT`／`ROOMS_REMOTE_PORT` | 核心綁的位址、本機埠（8775）、要鑰匙的埠（compose 開 8776，0＝不開） |
+| `ROOMS_LOCAL_PORT`／`ROOMS_LOCAL_ORIGINS` | 本機小幫手的埠（8777）、它接受的頁面來源（預設 8775 的兩種寫法） |
+| `ROOMS_ACC_REPO`／`ROOMS_JUDGMENT_LAYER` | 本機小幫手找 acc 的 repo、判斷層的資料夾 |
+| `ROOMS_DESKTOP_SESSIONS` | Windows 桌面版 Codex 的對話紀錄資料夾（預設自動找） |
+| `ROOMS_RECORD_TURNS` | 設成 `1` 才記：每個本機 Claude 對話每一輪最後說的話與使用者下一句，存在 `<data>/turns/`（權限 600，只在這台機器）；預設不記 |
 
 命令列、轉送程式、MCP 和核心的 container 都會讀 repo 根目錄的 `local.env`（不進 git），本機設定寫在那裡。
 
@@ -176,4 +205,9 @@ curl -H "Authorization: Bearer $(cat <鑰匙檔>)" http://127.0.0.1:8776/api/ove
 python3 -m unittest discover -s tests
 python3 adapters/codex_cli/test_cli.py
 python3 adapters/mcp/test_mcp.py
+python3 tests/ui_check.py        # 畫面互動檢查，要有 headless Chrome
 ```
+
+## 授權
+
+MIT，見 [LICENSE](LICENSE)。如果這個工具對你有幫助，歡迎在你的作品或文章裡提一下、附上連結。
