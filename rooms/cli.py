@@ -226,7 +226,7 @@ def _last_assistant_text(transcript, tail=400_000):
 
 
 def record_turn(payload, event_name, session):
-    """做法點資料集的原料（2026-10-28 使用者 要的）：每一輪 agent 最後說的話、使用者下一次開口的原文，照時間記下來。
+    """做法點資料集的原料：每一輪 agent 最後說的話、使用者下一次開口的原文，照時間記下來。
     所有本機 Claude 對話都記（不管在不在房間）；只存在這台機器的 <data>/turns/，之後再配對、判有沒有提做法、選了哪個。"""
     if event_name == "Stop":
         text, kind = _last_assistant_text(payload.get("transcript_path", "")), "agent"
@@ -486,7 +486,7 @@ def accounts_now():
 
 
 def spawn_notes(room, name, account, home, claude, model):
-    """開成員時給主持看的提醒（不擋）：使用者 的原則是一次一兩個、額度到提醒線先停、名字別互相是開頭。"""
+    """開成員時給主持看的提醒（不擋）：使用者的原則是一次一兩個、額度到提醒線先停、名字別互相是開頭。"""
     from rooms import quota
     notes = []
     rows = {r["name"]: r for r in accounts_now()}

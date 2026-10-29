@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 
 CONFIG = Path(os.environ.get("ROOMS_ACCOUNTS_FILE", "").strip() or os.path.expanduser("~/.config/agent-rooms/accounts.json"))
-WARN = 80            # 預設提醒線（%）：使用者 的原則「5 小時額度到 80% 要停」
+WARN = 80            # 預設提醒線（%）：5 小時額度到這裡就提醒先停
 CACHE_SECONDS = 300
 _lock = threading.Lock()
 _cache = {}

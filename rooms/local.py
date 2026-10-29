@@ -124,7 +124,8 @@ def decide(data):
         return fn(data["project"], data["id"])
     if not jl_dir():
         raise ValueError("這台沒有判斷層")
-    return jl("decide", data["id"], choice, "--by", "user", "--via", "room")
+    from rooms.identity import USER
+    return jl("decide", data["id"], choice, "--by", USER, "--via", "room")
 
 
 # ── 本機工具：看有沒有在跑、照登記的指令啟動、產生程式圖。工具的資料以核心登記的為準，頁面送來的只拿代號 ──
