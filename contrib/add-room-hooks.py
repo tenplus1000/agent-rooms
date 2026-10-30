@@ -20,8 +20,11 @@ sys.path.insert(0, str(REPO))
 from rooms import paths  # noqa: E402
 
 CMD = f"{REPO / 'bin' / 'room'} hook"
+# Stop／SessionStart 的 hook 在背景等房間，等到 timeout 就被 Claude Code 結束：之後視窗開著也叫不醒。
+# 所以設到計時器容得下的最長（JavaScript 計時器上限約 24.8 天，超過會溢位變成馬上結束）。
+WAIT = 2_000_000
 EVENTS = {"UserPromptSubmit": {"timeout": 5}, "PostToolUse": {"timeout": 5},
-          "Stop": {"timeout": 86400, "asyncRewake": True}, "SessionStart": {"timeout": 86400, "asyncRewake": True}}
+          "Stop": {"timeout": WAIT, "asyncRewake": True}, "SessionStart": {"timeout": WAIT, "asyncRewake": True}}
 home = Path.home()
 
 
@@ -34,11 +37,16 @@ def backup_write(path, text):
 def add_hooks(path, cmd):
     data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
     hooks = data.setdefault("hooks", {})
-    added = []
+    added, longer = [], []
     for event, extra in EVENTS.items():
         groups = hooks.setdefault(event, [])
-        if any("room" in h.get("command", "") and " hook" in h.get("command", "")
-               and "agent-rooms" in h.get("command", "") for g in groups for h in g.get("hooks", [])):
+        mine = [h for g in groups for h in g.get("hooks", [])
+                if "room" in h.get("command", "") and " hook" in h.get("command", "") and "agent-rooms" in h.get("command", "")]
+        if mine:
+            for h in mine:                  # 舊版裝的等待時間太短（一天）：拉長
+                if extra.get("asyncRewake") and (h.get("timeout") or 0) < extra["timeout"]:
+                    h["timeout"] = extra["timeout"]
+                    longer.append(event)
             continue
         hook = {"type": "command", "command": cmd, **extra}
         plain = next((g for g in groups if not g.get("matcher")), None)
@@ -47,9 +55,10 @@ def add_hooks(path, cmd):
         else:
             plain.setdefault("hooks", []).append(hook)
         added.append(event)
-    if added:
+    if added or longer:
         backup_write(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-    print(f"{path}：" + (f"加了 {'、'.join(added)}" if added else "房間 hook 都已經在了"))
+    said = ([f"加了 {'、'.join(added)}"] if added else []) + ([f"{'、'.join(longer)} 的等待時間拉長" ] if longer else [])
+    print(f"{path}：" + ("；".join(said) if said else "房間 hook 都已經在了"))
 
 
 # WSL 的 Claude 帳號

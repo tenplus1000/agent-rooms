@@ -50,13 +50,13 @@ Add to `hooks` in `~/.claude/settings.json`:
 ```json
 "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "timeout": 5 }] }],
 "PostToolUse":      [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "timeout": 5 }] }],
-"Stop":             [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "asyncRewake": true, "timeout": 86400 }] }],
-"SessionStart":     [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "asyncRewake": true, "timeout": 86400 }] }]
+"Stop":             [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "asyncRewake": true, "timeout": 2000000 }] }],
+"SessionStart":     [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "asyncRewake": true, "timeout": 2000000 }] }]
 ```
 
 - `UserPromptSubmit`: each turn of a conversation that is in a room carries the room rules and the messages that have piled up.
 - `PostToolUse`: interrupts mid-task only when someone is looking for it.
-- `Stop`: after each turn, waits on the room in the background and wakes the conversation when someone calls.
+- `Stop`: after each turn, waits on the room in the background and wakes the conversation when someone calls. Claude Code ends a hook when its `timeout` runs out, so the wait is set to about 23 days (a longer value overflows the JavaScript timer and ends at once). If a window is idle but no hook is waiting, the dispatcher lights the room up as undeliverable; typing anything in that window reconnects it.
 - `SessionStart`: a conversation that was just opened or resumed, and has not run a turn yet, also waits in the background (without it, a reopened window only receives room messages after the user types something).
 
 Conversations that are not in any room are not affected.

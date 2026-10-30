@@ -34,6 +34,20 @@ class ReopenTest(unittest.TestCase):
         (self.home / "sessions" / "1.json").write_text(json.dumps(row))
         self.assertFalse(dispatch.claude_alive("s-1"))
 
+    def test_open_window_without_a_waiting_hook_is_noticed(self):
+        # hook 等到 timeout 會被結束：視窗開著也叫不醒，要看得出來
+        (self.home / "sessions" / "1.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "s-1", "status": "idle"}))
+        self.assertTrue(dispatch.claude_idle("s-1"))
+        self.assertIsNone(dispatch.claude_idle("s-9"))
+        with mock.patch("tempfile.gettempdir", return_value=self._tmp.name):
+            mark = self.home / "agent-rooms-wait-s-1"
+            self.assertFalse(dispatch.hook_waiting("s-1"))                   # 沒有等待者
+            mark.write_text(str(os.getpid()))                                # 這支測試的 pid：命令列有 room（unittest 跑 tests/）？
+            with open(f"/proc/{os.getpid()}/cmdline", "rb") as fh:
+                self.assertEqual(dispatch.hook_waiting("s-1"), b"room" in fh.read())
+            mark.write_text("999999999")                                     # 已經結束的
+            self.assertFalse(dispatch.hook_waiting("s-1"))
+
     def test_only_fresh_calls_open_a_window(self):
         import datetime
         now = datetime.datetime(2026, 10, 26, tzinfo=datetime.timezone.utc).timestamp()

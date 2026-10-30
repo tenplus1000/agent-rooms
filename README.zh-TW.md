@@ -50,13 +50,13 @@ python3 contrib/add-room-hooks.py
 ```json
 "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "timeout": 5 }] }],
 "PostToolUse":      [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "timeout": 5 }] }],
-"Stop":             [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "asyncRewake": true, "timeout": 86400 }] }],
-"SessionStart":     [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "asyncRewake": true, "timeout": 86400 }] }]
+"Stop":             [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "asyncRewake": true, "timeout": 2000000 }] }],
+"SessionStart":     [{ "hooks": [{ "type": "command", "command": "/path/to/agent-rooms/bin/room hook", "asyncRewake": true, "timeout": 2000000 }] }]
 ```
 
 - `UserPromptSubmit`：在房裡的對話每一輪帶上房間規則與累積的訊息。
 - `PostToolUse`：做事做到一半，有人找它才插話。
-- `Stop`：每一輪結束後在背景等房間，有人找就叫醒它。
+- `Stop`：每一輪結束後在背景等房間，有人找就叫醒它。Claude Code 會在 `timeout` 到時結束 hook，所以等待時間設成約 23 天（再長會讓 JavaScript 的計時器溢位、馬上結束）。視窗閒著卻沒有 hook 在等時，轉送程式會亮燈說送不到；在那個視窗打一句話就接回來。
 - `SessionStart`：剛開或 resume、還沒跑過任何一輪的對話也先在背景等著（沒有它，重開的視窗要等使用者打一句話才收得到房間訊息）。
 
 不在任何房間的對話不受影響。

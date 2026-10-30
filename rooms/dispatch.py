@@ -558,6 +558,34 @@ def claude_alive(session):
     return False
 
 
+def claude_idle(session):
+    """開著這個對話的視窗是不是閒著（<帳號>/sessions/<pid>.json 的 status）；找不到當作不知道（None）。"""
+    for path in [p for home in claude_homes() for p in glob.glob(os.path.join(home, "sessions", "*.json"))]:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                info = json.load(fh)
+            if info.get("sessionId") == session and os.path.exists(f"/proc/{info['pid']}"):
+                return info.get("status") == "idle"
+        except (OSError, ValueError, KeyError):
+            continue
+    return None
+
+
+def hook_waiting(session):
+    """這個對話的 Stop／SessionStart hook 還在背景等房間嗎（room hook 等的時候把自己的 pid 寫在這個檔）。"""
+    import tempfile
+    try:
+        with open(os.path.join(tempfile.gettempdir(), f"agent-rooms-wait-{session}")) as fh:
+            pid = int(fh.read().strip())
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return b"room" in fh.read()     # pid 可能被別的程式重用：要確定還是 room hook
+    except (OSError, ValueError):
+        return False
+
+
+HOOK_GRACE = 90           # 視窗閒著、訊息等了這麼久還沒有 hook 在等，就當作 hook 已經結束
+
+
 def claude_transcript(session):
     """這台機器上（不是 Windows 桌面版）的對話紀錄：回傳 (紀錄路徑, 工作資料夾, 權限模式, 帳號資料夾)；找不到回 None。
     每個帳號都找：額度用完換帳號開的視窗，紀錄在另一個帳號底下；兩邊都有就取最近寫過的那份。"""
@@ -653,7 +681,16 @@ class ClaudeWorker(Worker):
                 if not got["events"] or self.stop:
                     continue
                 if claude_alive(self.session):
-                    time.sleep(15)              # 開著：Stop／PostToolUse hook 會送，這裡不插手
+                    # 開著：平常由 Stop／PostToolUse hook 送，這裡不插手。但 hook 等到 timeout 會被 Claude Code 結束
+                    # （舊設定一天），之後視窗開著也叫不醒：閒著、訊息擺超過 HOOK_GRACE、又沒有 hook 在等，就亮燈說送不到
+                    events = calls_for(self.session, got["events"])
+                    if events and not hook_waiting(self.session) and claude_idle(self.session) \
+                            and time.time() - datetime.datetime.fromisoformat(events[0]["at"]).timestamp() > HOOK_GRACE:
+                        self.fail("hook_gone", "視窗開著，但它在背景等房間的 hook 已經結束了（等太久被 Claude Code 收掉）；"
+                                  "在那個視窗打一句話就會接上，訊息留著", events)
+                        time.sleep(60)
+                        continue
+                    time.sleep(15)
                     continue
                 events = calls_for(self.session, got["events"])
                 if not events:
