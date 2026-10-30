@@ -48,5 +48,15 @@ class LocalHelperTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 400)
 
 
+class LooseSuggestionsTest(unittest.TestCase):
+    def test_lists_only_suggestions_no_shown_member_can_carry(self):
+        rows = [{"id": "a", "subject": {"session": "s1"}}, {"id": "b", "subject": {"memory_entry": "e1", "file": "x.md"}},
+                {"id": "c", "subject": {"session": "gone"}}, {"id": "d"}]
+        with mock.patch.object(local, "jl_dir", return_value="/x"), mock.patch.object(local, "jl", return_value=rows):
+            self.assertEqual([x["id"] for x in local.loose(["s1"])], ["b", "c", "d"])
+        with mock.patch.object(local, "jl_dir", return_value=None):
+            self.assertEqual(local.loose(["s1"]), [])
+
+
 if __name__ == "__main__":
     unittest.main()

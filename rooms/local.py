@@ -111,6 +111,15 @@ def badges(sids):
     return counts
 
 
+def loose(sids):
+    """等使用者決定、卻掛不到畫面上任何一個點的建議：沒有 session 的（例如記憶條目過期），
+    或 session 不在畫面上的（不在任何房間、已收起的對話）。畫面上用一張卡列出來。"""
+    if not jl_dir():
+        return []
+    shown = set(sids)
+    return [x for x in jl("list") if (x.get("subject") or {}).get("session") not in shown]
+
+
 def decide(data):
     """接受／拒絕一則建議：Super 建議交給 acc，判斷層的交給佇列（它自己執行並記下結果）。"""
     choice = data.get("choice")
@@ -314,6 +323,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(tool_map(q.get("id", "")))
             if url.path == "/local/accounts":
                 return self._send(accounts_view(q.get("force") == "1"))
+            if url.path == "/local/loose":
+                return self._send(loose([s for s in q.get("sids", "").split(",") if s]))
             if url.path == "/local/badges":
                 return self._send(badges([s for s in q.get("sids", "").split(",") if s]))
             self._send({"error": "not found"}, 404)

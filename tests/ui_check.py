@@ -21,8 +21,17 @@ local.badges = lambda sids: {s: (len(waiting) if s == "a1" else 0) for s in sids
 local.session_view = lambda sid: {"acc": {"status": "active", "objective": "我要整理標註", "success_criteria": "全部對過",
     "project": "/p", "parked": [], "history": [{"status": "achieved", "objective": "我要開房", "note": "開好了"}]},
     "log": "- 設定 我要整理標註", "super": [], "suggestions": waiting if sid == "a1" else []}
+import os
+LOOSE = os.environ["LOOSE_FILE"]                 # 掛不到點上的建議：測試中途寫進這個檔才出現
+def loose(sids):
+    try:
+        return json.load(open(LOOSE, encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+local.loose = loose
 def decide(d):
     waiting[:] = [w for w in waiting if w["id"] != d["id"]]
+    json.dump([x for x in loose([]) if x["id"] != d["id"]], open(LOOSE, "w", encoding="utf-8"))
     return {"id": d["id"], "status": d["choice"] + "ed"}
 local.decide = decide
 local.tool_status = lambda: {}
@@ -441,7 +450,8 @@ try:
     shot("工具小球")
 
     # 本機小幫手（acc、判斷層的建議）：假的小幫手，a1 有兩則等決定
-    fake = subprocess.Popen([sys.executable, "-c", FAKE_LOCAL], env=dict(env, ROOMS_LOCAL_ORIGINS=BASE),
+    loose_file = os.path.join(data, "loose.json")
+    fake = subprocess.Popen([sys.executable, "-c", FAKE_LOCAL], env=dict(env, ROOMS_LOCAL_ORIGINS=BASE, LOOSE_FILE=loose_file),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
     js("localStorage.setItem('rooms.localUrl', JSON.stringify('http://127.0.0.1:8797')); location.reload()"); time.sleep(3)
@@ -475,6 +485,21 @@ try:
     shot("acc面板")
     js("[...document.querySelectorAll('.accp .pick2 button')].find(b => b.textContent === '拒絕').click()"); time.sleep(1.5)
     check("按拒絕送到小幫手、數字變少", js("document.querySelector('[data-session=\"a1\"] .abadge-dot text') && document.querySelector('[data-session=\"a1\"] .abadge-dot text').textContent") == "1")
+    key("Escape"); time.sleep(0.4)
+    # 沒有 session 的建議（例如記憶條目過期）：左邊一張卡，點開逐則接受／拒絕
+    json.dump([{"id": "m1", "kind": "memory_status", "subject": {"memory_entry": "e1", "file": "rule.md"},
+                "title": "「某條規則」→ superseded", "reason": "後來的規則取代了它", "evidence": []},
+               {"id": "p1", "kind": "project_assign", "subject": {"session": "zz-not-shown"},
+                "title": "這個對話改掛到「丙」？", "reason": "連續 3 個", "evidence": [{"objective": "我要做丙", "confidence": 0.9}]}],
+              open(loose_file, "w", encoding="utf-8"))
+    js("refreshLocal()"); time.sleep(1.2)
+    check("沒有點可掛的建議在左邊出現", "等你決定 2" in (js("document.querySelector('#quota').innerText") or ""))
+    js("[...document.querySelectorAll('#quota .qcard')].find(c => c.textContent.startsWith('等你決定')).click()"); time.sleep(0.6)
+    txt = js("document.querySelector('.accp').innerText") or ""
+    check("列出標題、理由與記憶檔", all(t in txt for t in ("某條規則", "後來的規則取代了它", "rule.md", "我要做丙")))
+    shot("掛不到點上的建議")
+    js("[...document.querySelectorAll('.accp .pick2 button')].find(b => b.textContent === '接受').click()"); time.sleep(1.5)
+    check("接受後少一則", "等你決定 1" in (js("document.querySelector('#quota').innerText") or ""))
     key("Escape"); time.sleep(0.4)
     fake.terminate()
     shot("結束")

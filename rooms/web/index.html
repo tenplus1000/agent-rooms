@@ -225,7 +225,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 <script>
 "use strict";
 // ── 狀態 ─────────────────────────────────────────
-const S = { ov: null, sel: null, mode: null, wins: {}, layers: [], desks: {}, drag: null, view: null, local: null, badges: {} };
+const S = { ov: null, sel: null, mode: null, wins: {}, layers: [], desks: {}, drag: null, view: null, local: null, badges: {}, loose: [] };
 const W = 150, D = 150, H = 100, COS = 0.866, SIN = 0.5;          // 立方體尺寸與等角投影
 // 接上別間的六個位置（跟核心的 NEIGHBOR_SIDES 一樣）：地板四個方向＋上下疊；拖到離其中一個這麼近就吸過去
 const SIDES = [[W * COS, W * SIN], [-W * COS, -W * SIN], [-D * COS, D * SIN], [D * COS, -D * SIN], [0, -H], [0, H]];
@@ -1138,7 +1138,11 @@ async function refreshLocal() {
     const sids = agents().filter(a => !a.shelved).map(a => a.session);
     const got = await local("GET", "/local/badges", { sids: sids.join(",") });
     if (JSON.stringify(got) !== JSON.stringify(S.badges)) { S.badges = got; render(); }
-  } catch (e) { S.local = null; if (Object.keys(S.badges).length) { S.badges = {}; render(); } }
+    if (S.local.jl) {
+      const lo = await local("GET", "/local/loose", { sids: sids.join(",") });
+      if (JSON.stringify(lo) !== JSON.stringify(S.loose)) { S.loose = lo; drawQuota(); }
+    }
+  } catch (e) { S.local = null; if (Object.keys(S.badges).length) { S.badges = {}; render(); } if (S.loose.length) { S.loose = []; drawQuota(); } }
 }
 function accBadge(a) {
   const n = S.badges[a.session];
@@ -1147,6 +1151,36 @@ function accBadge(a) {
   b.addEventListener("pointerdown", e => e.stopPropagation());
   b.addEventListener("click", e => { e.stopPropagation(); accPanel(a); });
   return b;
+}
+// 掛不到任何點上的建議（沒有 session：記憶條目過期；或那個對話不在畫面上）：左邊一張卡，點開逐則決定
+function looseWhy(x) {
+  const sub = x.subject || {};
+  const about = sub.memory_entry ? `記憶 ${sub.file || ""}（${sub.memory_entry}）` : sub.session ? `對話 ${sub.session.slice(0, 8)}（不在畫面上）` : "";
+  const ev = (x.evidence || []).map(v => "・" + (typeof v === "string" ? v : v.objective || v.text || v.quote || JSON.stringify(v))
+    + (v && v.confidence ? `（${v.confidence}）` : ""));
+  return [about, x.reason, ...ev].filter(Boolean).join("\n");
+}
+function loosePanel() {
+  const body = el("div", { class: "scroll" });
+  const box = el("div", { class: "dialog wide accp" }, el("h3", { text: `等你決定（${S.loose.length}）` }), body,
+    el("div", { class: "row", style: "margin-top:10px" }, el("button", { text: "關閉", on: { click: () => closeTop() } })));
+  const layer = el("div", { class: "layer" }, box);
+  layer.addEventListener("pointerdown", e => { if (e.target === layer) closeTop(); });
+  const decide = async (id, choice, label) => {
+    try {
+      const r = (await local("POST", "/local/decide", { source: "jl", id, choice })).result || {};
+      toast(r.status === "failed" || r.failed ? `${label}了，但執行沒成功：${r.error || (r.failed || {}).error || ""}` : `${label}了`);
+    } catch (e) { return toast("沒成功：" + e.message); }
+    closeTop(); await refreshLocal(); if (S.loose.length) loosePanel();
+  };
+  if (!S.loose.length) body.append(el("div", { class: "box", text: "沒有等你決定的建議。" }));
+  for (const x of S.loose) body.append(el("div", { class: "box ask" }, el("b", { text: x.title || x.kind }),
+    el("div", { class: "why", text: looseWhy(x) }),
+    el("div", { class: "pick2" },                     // 接受、拒絕一樣大、一樣好按
+      el("button", { text: "接受", on: { click: () => decide(x.id, "accept", "接受") } }),
+      el("button", { text: "拒絕", on: { click: () => decide(x.id, "reject", "拒絕") } }))));
+  document.body.append(layer);
+  pushLayer(() => layer.remove());
 }
 const ACC_ST = { achieved: "成功", failed: "失敗", parked: "擱置", active: "進行中", unset: "尚未設定" };
 async function accPanel(m) {
@@ -1212,8 +1246,15 @@ function resetText(iso) {                // 今天的只寫幾點；其他寫月
 }
 function drawQuota() {
   const box = $("quota"); box.replaceChildren();
-  if (!S.accounts) { box.style.display = "none"; return; }
+  const n = (S.loose || []).length;
+  if (!S.accounts && !n) { box.style.display = "none"; return; }
   box.style.display = "flex";
+  if (n) {                                          // 掛不到任何點上的建議：收起額度欄也照樣看得到
+    const card = el("div", { class: "qcard hot", style: "padding:4px 8px;cursor:pointer", title: "不屬於畫面上任何對話的建議", text: `等你決定 ${n} ▸` });
+    card.addEventListener("click", () => loosePanel());
+    box.append(card);
+  }
+  if (!S.accounts) return;
   if (store.get("quotaHidden", false)) {           // 收起來：只留一個小標籤，點了再打開
     const tab = el("div", { class: "qcard", style: "padding:3px 8px;align-self:flex-start", title: "打開帳號額度", text: "額度 ▸" });
     tab.addEventListener("click", () => { store.set("quotaHidden", false); drawQuota(); });
