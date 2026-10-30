@@ -1239,6 +1239,7 @@ function drawQuota() {
       el("div", { class: "nm" }, el("span", { text: a.name }), el("small", { text: a.kind === "codex" ? "Codex" : "Claude" })),
       u.error ? el("div", { class: "err", text: u.error }) : null,
       u.error ? null : row("5h", u.five_hours), u.error ? null : row("7天", u.week),
+      u.stale ? el("div", { class: "rst", title: u.stale, text: u.stale }) : null,
       a.running ? el("div", { class: "run", title: (a.running_names || []).join("、"), text: `在跑 ${a.running} 個` }) : null);
     card.addEventListener("click", e => accountMenu(a, e.clientX, e.clientY));
     box.append(card);

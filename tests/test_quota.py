@@ -60,5 +60,59 @@ class SpawnNotesTest(unittest.TestCase):
         self.assertIn("沒指定 --model", text)
 
 
+class UsageCacheTest(unittest.TestCase):
+    """用量網址會限流：所有程式共用一份結果，被擋時照舊顯示上次的數字，等一段時間再試。"""
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.p = mock.patch.object(quota, "CACHE", self.dir / "usage.json")
+        self.p.start()
+        self.acct = {"name": "c", "kind": "claude", "home": str(self.dir / "c")}
+
+    def tearDown(self):
+        self.p.stop()
+
+    def test_cached_then_rate_limited_keeps_last_numbers_and_backs_off(self):
+        ok = {"five_hours": {"used": 30, "resets_at": None}, "week": {"used": 5, "resets_at": None}}
+        calls = []
+        with mock.patch.object(quota, "_claude", side_effect=lambda h: calls.append(h) or dict(ok)):
+            self.assertEqual(quota.usage(self.acct)["five_hours"]["used"], 30)
+            quota.usage(self.acct)                                    # 10 分鐘內：不重問
+        self.assertEqual(len(calls), 1)
+        with mock.patch.object(quota, "_claude", side_effect=lambda h: calls.append(h) or {"error": "x", "limited": True}):
+            got = quota.usage(self.acct, force=True)
+            self.assertEqual(got["five_hours"]["used"], 30)          # 被擋：數字還在
+            self.assertIn("查太頻繁", got["stale"])
+            quota.usage(self.acct, force=True)                        # 等待時間內按 ↻ 也不再問
+        self.assertEqual(len(calls), 2)
+        self.assertIn("查太頻繁", quota.line({"name": "c", "kind": "claude", "usage": got}))
+
+    def test_expired_token_is_renewed_by_claude_not_reported_as_logged_out(self):
+        import time
+        home = self.dir / "c"
+        home.mkdir()
+        creds = home / ".credentials.json"
+        creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "old", "expiresAt": (time.time() - 3600) * 1000}}))
+
+        def renew(h):
+            creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "new", "expiresAt": (time.time() + 8 * 3600) * 1000}}))
+        seen = []
+
+        class Resp:
+            def __init__(self, req):
+                seen.append(req.get_header("Authorization"))
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def read(self):
+                return json.dumps({"five_hour": {"utilization": 12}, "seven_day": {"utilization": 3}}).encode()
+        with mock.patch.object(quota, "_claude_refresh", side_effect=renew) as r, \
+                mock.patch.object(quota.urllib.request, "urlopen", side_effect=lambda req, timeout: Resp(req)):
+            got = quota.usage(self.acct)
+        r.assert_called_once()
+        self.assertEqual(seen, ["Bearer new"])
+        self.assertEqual(got["five_hours"]["used"], 12)
+
+
 if __name__ == "__main__":
     unittest.main()
