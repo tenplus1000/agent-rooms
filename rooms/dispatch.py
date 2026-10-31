@@ -606,7 +606,7 @@ def claude_transcript(session):
                 continue
             if row.get("type") == "permission-mode":
                 mode = row.get("permissionMode") or mode
-            cwd = row.get("cwd") or cwd
+            cwd = cwd or row.get("cwd")     # 開始時的資料夾：記憶與專案指示照它載入；中途 cd 去的地方不算
     return found[0], cwd or os.path.expanduser("~"), mode, home
 
 

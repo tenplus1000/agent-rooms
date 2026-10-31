@@ -86,7 +86,8 @@ class ReopenTest(unittest.TestCase):
         rows = [{"type": "permission-mode", "permissionMode": "default"}, {"type": "user", "cwd": "/srv/a"},
                 {"type": "permission-mode", "permissionMode": "auto"}, {"type": "assistant", "cwd": "/srv/b"}]
         (self.home / "projects" / "-work" / "s-1.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
-        self.assertEqual(dispatch.claude_transcript("s-1")[1:3], ("/srv/b", "auto"))
+        # 開始時的資料夾（/srv/a）：重開時要用它，記憶和專案指示才會照原本的載入；中途 cd 到 /srv/b 不算
+        self.assertEqual(dispatch.claude_transcript("s-1")[1:3], ("/srv/a", "auto"))
         self.assertIsNone(dispatch.claude_transcript("s-9"))
 
     def test_window_on_another_account_reopens_on_that_account(self):
