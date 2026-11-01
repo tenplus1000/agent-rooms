@@ -77,8 +77,8 @@ class WakeTest(unittest.TestCase):
         self.assertNotIn("a", ask.call_args[0][5])
         self.assertIn("b", ask.call_args[0][5])
 
-    def test_at_self_wakes_yourself_three_times_in_a_row_at_most(self):
-        # 背景排程跑完 @自己：叫醒自己；連續三次中間沒有別人說話，第四次就不叫（免得自己一直轉）
+    def test_at_self_wakes_yourself_but_not_four_times_in_half_an_hour(self):
+        # 背景排程跑完 @自己：叫醒自己；30 分鐘內第四次、中間沒有別人說話就不叫（免得自己一直轉）
         for k in range(3):
             event = self.core.post("s-a", self.room, f"@a 排程 {k} 做完了")
             self.assertIn("s-a", event["wake"])
@@ -89,6 +89,15 @@ class WakeTest(unittest.TestCase):
         self.assertIn("notice", fourth)
         self.core.post("s-b", self.room, "@a 我插一句")                          # 有別人說話：重算
         self.assertIn("s-a", self.core.post("s-a", self.room, "@a 排程好了")["wake"])
+
+    def test_hourly_self_wakes_all_night_are_never_blocked(self):
+        # 夜間排程每小時 @自己 一次，中間沒有別人說話：間隔超過 30 分鐘，一直叫得醒
+        from rooms import core as core_mod
+        now = [1_000_000.0]
+        with mock.patch.object(core_mod.time, "time", side_effect=lambda: now[0]):
+            for k in range(6):
+                self.assertIn("s-a", self.core.post("s-a", self.room, f"@a 第 {k} 小時")["wake"])
+                now[0] += 3600
 
     def test_judge_log_points_back_to_the_post(self):
         # 判官紀錄和房間發言靠同一個 call 對上：房名會改、同一人會連發，用時間對不準

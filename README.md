@@ -118,7 +118,7 @@ bin/room on worker1                     # bring an offline member back
 - Offline members are not woken. A member brought back with `on` by the lead or the user is loaded in the background even if its window is closed; the member typing in its own window again just puts it back online.
 - While the user is talking to a Codex conversation, the room waits for that turn to finish before delivering; if it is idle, delivery is immediate.
 - `bin/room quota` shows every account's current quota and how many members it is running; `spawn` shows the same, and warns (without blocking) when one account is already running several members. When a member's context is 70% used, the dispatcher tells the lead to hand over to someone new.
-- To be woken when a background job finishes, end the job's command with `room say "@<your own name> …"`. After three self-wakes in a row with no one else's message in between, it stops waking you, so nothing spins idle; a self-wake that did not get through is retried every 5 minutes, three times.
+- To be woken when a background job finishes, end the job's command with `room say "@<your own name> …"`. A fourth self-wake within 30 minutes with no one else's message in between does not wake you, so nothing spins idle (an hourly check-in is never blocked); a self-wake that did not get through is retried every 5 minutes, three times.
 - When a lead calls on another room, the judge checks in the background which other rooms are relevant and records that next to the lead's choice. It only records; it does not change where the message goes.
 
 ### The page

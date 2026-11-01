@@ -64,7 +64,8 @@ def _now():
 # 工具的分類：畫面右側照這三類排，加新工具時照該類的模板填（見 contrib/tool-templates.md）
 TOOL_KINDS = {"dashboard": "儀表板", "database": "資料庫與檢視介面", "assistant": "助手工具"}
 
-SELF_WAKES = 3          # 連續被自己叫醒幾次（中間沒有別人的訊息）就不再叫
+SELF_WAKES = 3          # SELF_WINDOW 秒內被自己叫醒幾次（中間沒有別人的訊息）之後就不再叫：防空轉
+SELF_WINDOW = 1800      # 只看最近 30 分鐘：每小時回來看一次的排程不會被擋
 
 class Core:
     def __init__(self, data_dir):
@@ -815,11 +816,15 @@ class Core:
             self_note = None
             if self_call:
                 me = self.state["agents"][actor]
-                if me.get("self_wakes", 0) < SELF_WAKES:
-                    me["self_wakes"] = me.get("self_wakes", 0) + 1
+                now = time.time()
+                before = me.get("self_wakes") if isinstance(me.get("self_wakes"), list) else []   # 舊資料是次數
+                recent = [t for t in before if now - t < SELF_WINDOW]
+                if len(recent) < SELF_WAKES:
+                    me["self_wakes"] = recent + [now]
                 else:
+                    me["self_wakes"] = recent
                     self_call = False
-                    self_note = f"已經連續 {SELF_WAKES} 次叫醒自己、中間沒有別人的訊息，這次不叫醒你。"
+                    self_note = f"{SELF_WINDOW // 60} 分鐘內已經叫醒自己 {SELF_WAKES} 次、中間沒有別人的訊息，這次不叫醒你。"
             desk = room.get("desk")
             if desk and actor != desk and desk not in wake:
                 wake.append(desk)                     # 專屬管道：使用者講的話都是給那個全域角色的
