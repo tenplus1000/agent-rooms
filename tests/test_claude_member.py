@@ -19,7 +19,7 @@ class ClaudeMemberTest(unittest.TestCase):
         fake.write_text(f"""#!/usr/bin/env python3
 import json, os, sys
 with open({str(self.record)!r}, "a") as fh:
-    fh.write(json.dumps({{"args": sys.argv[1:], "cwd": os.getcwd(), "home": os.environ.get("CLAUDE_CONFIG_DIR"),
+    fh.write(json.dumps({{"args": sys.argv[1:], "stdin": sys.stdin.read(), "cwd": os.getcwd(), "home": os.environ.get("CLAUDE_CONFIG_DIR"),
                          "dispatched": os.environ.get("ROOMS_DISPATCHED")}}) + "\\n")
 if "--session-id" in sys.argv:                       # 真的 claude 一開始就建好對話紀錄
     sid = sys.argv[sys.argv.index("--session-id") + 1]
@@ -63,9 +63,25 @@ sys.exit(1 if fail else 0)
             self.assertEqual(a[a.index("--permission-mode") + 1], "auto")
             self.assertTrue(a[a.index("--allowedTools") + 1].endswith("bin/room:*)"))
             self.assertEqual((c["cwd"], c["home"], c["dispatched"]), (str(self.work), home, "1"))
-            self.assertEqual(a[-1], "房間的新訊息")
+            self.assertEqual(c["stdin"], "房間的新訊息")                         # 訊息走 stdin，不放在參數裡
+            self.assertNotIn("房間的新訊息", a)
         acks = [kw["seq"] for path, kw in self.posts if path == "/api/ack"]
         self.assertEqual(acks, [3, 5])                                        # 跑完才推進
+
+    def test_first_wake_with_a_huge_room_history_still_starts(self):
+        # 第一次叫醒帶整段房間歷史：放在參數裡會 Argument list too long，成員根本起不來
+        session, _ = dispatch.spawn_claude(str(self.work), "c2")
+        dispatch.render_claude = lambda room, session, events: "很長的歷史\n" * 400_000      # 約 6MB
+        dispatch.HeadlessClaudeWorker(session).turn("R1", [{"seq": 200}])
+        self.assertEqual(len(self.calls()[0]["stdin"]), len("很長的歷史\n") * 400_000)
+        self.assertEqual([kw["seq"] for p, kw in self.posts if p == "/api/ack"], [200])
+
+    def test_member_that_cannot_start_keeps_the_batch(self):
+        session, _ = dispatch.spawn_claude(str(self.work), "c2")
+        dispatch.CLAUDE_BIN = "/nonexistent/claude"
+        with self.assertRaises(OSError):
+            dispatch.HeadlessClaudeWorker(session).turn("R1", [{"seq": 7}])
+        self.assertNotIn("/api/ack", [p for p, kw in self.posts])               # 起不來：游標不動，下一圈重送
 
     def test_failed_turn_lights_up_and_next_turn_resumes(self):
         session, _ = dispatch.spawn_claude(str(self.work), "c2")

@@ -833,22 +833,23 @@ class HeadlessClaudeWorker(Worker):
         env.pop("CLAUDE_CONFIG_DIR", None)
         if os.path.realpath(member["home"]) != os.path.realpath(os.path.expanduser("~/.claude")):
             env["CLAUDE_CONFIG_DIR"] = member["home"]     # 預設帳號不設：設了它會改到那個資料夾裡找 .claude.json
-        # 先推進游標再跑（轉送程式重啟時這一輪不會被砍，也不會重送）；撞到額度上限才倒回，重置後補送
-        call("POST", "/api/ack", session=self.session, room_id=room_id, seq=events[-1]["seq"])
-        call("POST", "/api/touch", session=self.session)
-        self.last_sent = time.time()
-        self.sent.append(self.last_sent)
-        self.note("turn", f"背景跑 claude -p（{member['account']}）送了 {len(events)} 則（到 #{events[-1]['seq']}）")
         os.makedirs(os.path.join(CLAUDE_MEMBERS, "logs"), exist_ok=True)
         with open(os.path.join(CLAUDE_MEMBERS, "logs", self.session + ".jsonl"), "a", encoding="utf-8") as out:
+            # 訊息從 stdin 送：第一次叫醒會帶整段房間歷史，放在參數裡會超過系統上限（Argument list too long）。
             # 自己一個 session：轉送程式重啟（systemd 只停主程式）時不會被一起砍掉
-            proc = subprocess.Popen(args + [text], cwd=member["cwd"], env=env, stdin=subprocess.DEVNULL,
+            proc = subprocess.Popen(args, cwd=member["cwd"], env=env, stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            # 起得來才推進游標（起不來這一批留著，下一圈重送）；跑起來之後轉送程式重啟也不會重送；撞到額度上限才倒回
+            call("POST", "/api/ack", session=self.session, room_id=room_id, seq=events[-1]["seq"])
+            call("POST", "/api/touch", session=self.session)
+            self.last_sent = time.time()
+            self.sent.append(self.last_sent)
+            self.note("turn", f"背景跑 claude -p（{member['account']}）送了 {len(events)} 則（到 #{events[-1]['seq']}）")
             running = os.path.join(CLAUDE_MEMBERS, "running", self.session + ".pid")
             os.makedirs(os.path.dirname(running), exist_ok=True)
             with open(running, "w") as fh:
                 fh.write(str(proc.pid))
-            stdout, stderr = proc.communicate()
+            stdout, stderr = proc.communicate(input=text)
             done = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
             try:
                 os.remove(running)
