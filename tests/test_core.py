@@ -33,6 +33,19 @@ class CoreTest(unittest.TestCase):
         self.core.move(USER, "s-cx2", rid)
         return rid
 
+    def test_read_shows_the_newest_messages_and_pages_both_ways(self):
+        # 看紀錄要的是最近發生什麼：房間超過 200 則時，預設給最新的 200 則
+        for k in range(250):
+            self.core.post(USER, self.room, f"第 {k} 則")
+        rows = self.core.history(USER, self.room)
+        last = self.core.history(USER, self.room, before=10 ** 9, limit=1)[0]["seq"]
+        self.assertEqual(len(rows), 200)
+        self.assertEqual(rows[-1]["seq"], last)
+        older = self.core.history(USER, self.room, before=rows[0]["seq"], limit=10)
+        self.assertEqual(older[-1]["seq"], rows[0]["seq"] - 1)
+        after = self.core.history(USER, self.room, since=last - 5)
+        self.assertEqual([e["seq"] for e in after], list(range(last - 4, last + 1)))
+
     def test_host_messages_another_host_by_name_or_room_id(self):
         other = self.other_room()
         got = self.core.post("s-claude", self.room, "@codex-1 你那邊的標註格式給我")

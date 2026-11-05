@@ -39,7 +39,8 @@ TOOLS = [
     tool('room_leave', '移動自己離開房間。'),
     tool('room_who', '讀取房間與成員。', {'room_id': ROOM}),
     tool('room_read', '讀取房間 history，不推進監聽游標。', {
-        'room_id': ROOM, 'since': field('integer', '只取 seq 大於 since 的事件，預設 0。'),
+        'room_id': ROOM, 'since': field('integer', '只取 seq 大於 since 的事件；不給就是最新的 limit 則。'),
+        'before': field('integer', '只取 seq 小於 before 的最新 limit 則（往前翻）。'),
         'limit': field('integer', '事件數量，預設 200。')}),
     tool('room_say', '向房間發送文字。', {'room_id': ROOM, 'text': TEXT}, ('text',)),
     tool('room_whiteboard_get', '讀取白板。', {'room_id': ROOM}),

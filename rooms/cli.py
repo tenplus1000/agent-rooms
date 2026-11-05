@@ -592,7 +592,8 @@ def main(argv=None):
     sub.add_parser("moves")
     sub.add_parser("rooms")
     sub.add_parser("who")
-    s = sub.add_parser("read"); s.add_argument("--since", type=int, default=0); s.add_argument("--limit", type=int, default=200)
+    s = sub.add_parser("read", help="預設看最新的 --limit 則；--since N 看第 N 則之後的；--before N 看第 N 則之前的")
+    s.add_argument("--since", type=int, default=0); s.add_argument("--before", type=int); s.add_argument("--limit", type=int, default=200)
     s = sub.add_parser("say"); s.add_argument("text", nargs="?", default="", help="- 是從 stdin 讀（訊息裡有 $ 或反引號時用 <<'EOF'，shell 不會改字）")
     s.add_argument("--file", action="append", metavar="PATH", help="附檔案（圖片、任何檔，可以重複）")
     s = sub.add_parser("board"); s.add_argument("--set", metavar="FILE", help="用檔案內容取代白板（- 是 stdin）")
@@ -742,7 +743,8 @@ def main(argv=None):
         return show(call("GET", f"/api/rooms/{room}", actor))
     if a.cmd == "read":
         name = call("GET", f"/api/rooms/{room}", actor)["name"]
-        for event in call("GET", f"/api/rooms/{room}/history", actor, since=a.since, limit=a.limit):
+        page = {"before": a.before} if a.before else {"since": a.since}
+        for event in call("GET", f"/api/rooms/{room}/history", actor, limit=a.limit, **page):
             print(f"#{event['seq']} {local_time(event['at'], '%Y-%m-%d %H:%M:%S %Z')} " + line_for(event, name))
         return
     if a.cmd == "say":

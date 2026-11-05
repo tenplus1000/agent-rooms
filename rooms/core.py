@@ -491,6 +491,7 @@ class Core:
 
     def history(self, actor, room_id, since=0, limit=200, before=None):
         """這間房的事件。後進房的人一樣看得到全部，一次最多 limit 筆（大家同一個上限）。
+        沒給 since：最新的 limit 筆（看紀錄的人要的是最近發生什麼）。since：這一則之後的（接著往下讀）。
         before：拿這一則之前最新的 limit 筆（畫面打開對話先看最新的，往上捲再拿更早的）。"""
         with self.cond:
             self._require_see(actor, room_id)
@@ -498,6 +499,8 @@ class Core:
                 rows = [e for e in self.events.get(room_id, []) if e["seq"] < before]
                 return rows[-limit:] if limit else []
             rows = [e for e in self.events.get(room_id, []) if e["seq"] > since]
+            if not since:
+                return rows[-limit:] if limit else []
             return rows[:limit]
 
     # ── 白板 ─────────────────────────────────────────────
