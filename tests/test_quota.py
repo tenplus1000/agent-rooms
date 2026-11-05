@@ -86,6 +86,14 @@ class UsageCacheTest(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("查太頻繁", quota.line({"name": "c", "kind": "claude", "usage": got}))
 
+    def test_finds_claude_even_without_it_on_path(self):
+        # 本機小幫手是系統服務，PATH 沒有 ~/.local/bin：換新通行碼要自己找得到 claude
+        fake = self.dir / ".local" / "bin" / "claude"
+        fake.parent.mkdir(parents=True)
+        fake.write_text("#!/bin/sh\n"); fake.chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "ROOMS_CLAUDE_BIN": "", "HOME": str(self.dir)}):
+            self.assertEqual(quota.claude_bin(), str(fake))
+
     def test_expired_token_is_renewed_by_claude_not_reported_as_logged_out(self):
         import time
         home = self.dir / "c"
@@ -95,6 +103,7 @@ class UsageCacheTest(unittest.TestCase):
 
         def renew(h):
             creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "new", "expiresAt": (time.time() + 8 * 3600) * 1000}}))
+            return True
         seen = []
 
         class Resp:

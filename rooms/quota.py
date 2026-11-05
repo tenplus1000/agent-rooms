@@ -103,16 +103,29 @@ def _claude_creds(home):
     return json.loads((Path(home) / ".credentials.json").read_text(encoding="utf-8"))["claudeAiOauth"]
 
 
+def claude_bin():
+    """claude 執行檔：系統服務的 PATH 常常沒有 ~/.local/bin，所以常見的位置也找。"""
+    import shutil
+    given = os.environ.get("ROOMS_CLAUDE_BIN", "").strip()
+    if given:
+        return given
+    return shutil.which("claude") or next((p for p in (os.path.expanduser("~/.local/bin/claude"), "/usr/local/bin/claude")
+                                           if os.path.exists(p)), None)
+
+
 def _claude_refresh(home):
     """通行碼到期：讓 claude 自己換新（`claude auth status` 會順手換，不耗額度），我們不寫登入檔。"""
-    exe = os.environ.get("ROOMS_CLAUDE_BIN", "").strip() or "claude"
+    exe = claude_bin()
+    if not exe:
+        return False
     env = dict(os.environ)
     if os.path.realpath(home) != os.path.realpath(os.path.expanduser("~/.claude")):
         env["CLAUDE_CONFIG_DIR"] = home
     try:
         subprocess.run([exe, "auth", "status"], env=env, capture_output=True, timeout=60)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _claude(home):
@@ -121,7 +134,8 @@ def _claude(home):
     except (OSError, ValueError, KeyError):
         return {"error": "這個帳號沒有登入（找不到登入檔）"}
     if creds.get("expiresAt") and creds["expiresAt"] / 1000 < time.time() + 60:
-        _claude_refresh(home)
+        if not _claude_refresh(home):
+            return {"error": "通行碼到期了，但這台找不到 claude 程式來換新（可以設 ROOMS_CLAUDE_BIN）", "plan": creds.get("subscriptionType")}
         try:
             creds = _claude_creds(home)
         except (OSError, ValueError, KeyError):
