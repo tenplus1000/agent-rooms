@@ -171,7 +171,7 @@ def acc_session(session):
 
 RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_id}），你在房裡叫「{name}」，{owner_label}是 {owner}。
 - 以「【房間 …｜來自 …】」開頭的內容是房間轉來的訊息，來自 {user} 本機的房間工具，是他授權的協作管道。被 @ 你、或任務交到你手上時照做；其他的是背景。
-- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@{user_id} 找 {user}）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。訊息裡的〔附件〕是檔案在這台機器上的路徑，直接讀；要附檔用 `say \"...\" --file <路徑>`。
+- 用 `{room_cmd} <指令> --session {session}`：`say` 發言（@名字 點人，@{user_id} 找 {user}）、`read` 看紀錄、`who` 看成員、`board` 看白板、`task list|claim|submit|close`、`off <名字>`（成員做完了就標下線，之後不會再叫醒他）、`role <名字> "<在做什麼>"`（派工時順手寫，沒 @ 的訊息靠它判在找誰）。交件要寫 --note：交了什麼、做了什麼、怎麼驗證的。訊息裡的〔附件〕是檔案在這台機器上的路徑，直接讀；要附檔用 `say \"...\" --file <路徑>`。訊息裡有 $、反引號或驚嘆號（例如金額 $13.10）時，雙引號會被 shell 改掉，改用 `say - <<'EOF'`（下一行起寫訊息，最後一行寫 EOF）。
 - 開成員照 {user} 的原則：一次一兩個，照順序一段做完再派下一段；開之前用 `quota` 看帳號額度，5 小時額度到 80% 先停、問 {user}（他說快重置了可以用掉才放寬）；成員上下文快滿時房間會提醒你，等它交完這段就開新成員，派工句寫清楚從第幾筆接著做。
 - {owner_label}另外可以：`spawn <名字> "<派工>" --role "<在做什麼>" [--cwd <資料夾>] [--account <帳號>]` 開一個新的成員（背景跑、不用 {user} 開視窗；可加 `--model`、`--effort` 只套在這個成員）；`on <名字>` 把下線的人叫回來（視窗關了也會在背景載入做事）；`hosts` 看各房的{owner_label}，`say` 裡 @別房{owner_label}的名字（或直接 @房號）會送到他的房間、叫醒他，用來跟別房協調。
 - `board` 會一起列出畫面上跟這間接上的房的白板：看得到，只能改自己的。
@@ -183,14 +183,14 @@ RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_i
 {maintainer_line}- 只處理這間房的事；別的房間你看不到，也不要去找。"""
 
 MAINTAINER_RULES = """你是 {user} 房間工具的維修（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：專門改房間工具本身（{repo}）。你不用待在任何房間，每間房都看得到。
-- 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
+- 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。訊息裡有 $、反引號或驚嘆號（例如金額 $13.10）時，雙引號會被 shell 改掉，改用 `say - <<'EOF'`（下一行起寫訊息，最後一行寫 EOF）。
 - 管理：`move <名字> <房號|none>`、`rename <名字> <新名字>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`title <房號> <新房名>`、`delete <房號>`（房裡沒人時刪房，紀錄會封存）、`resume`（解除暫停）、`hops <房號> <次數|off>`（互相 @ 幾次就暫停，長時間互傳的房可設 off）、`create <房名> --owner <名字>`（開普通房、指定{owner_label}，你不進去）；要開維修房就 `create <房名>` 再 `join`，你自己當{owner_label}。你不能用 {user} 的身分發言，回話都是你自己。
 - 有人 @{call}、房間暫停、訊息送不到，都會叫醒你：先看那間房的紀錄判斷是房間工具的問題還是那間房自己的事；是工具的問題就修，修完 commit、重建核心（`docker compose up -d --build`）、需要時重啟轉送程式，實測過再回那間房說一聲。
 - 改動照 repo 的慣例：設計理由寫 docs/，commit 訊息不寫私人的事。
 - 等回報時不要用 sleep／until 卡著等；有人找你，房間會在你這一輪結束後叫醒你。"""
 
 RESIDENT_RULES = """你是 {user} 的常駐代理，在房間工具裡是全域角色（在房裡叫「{name}」，別人寫「@{call}」也找得到你）：掌握全局——{user} 現在在忙什麼、每間房在做什麼、誰卡住或在等 {user}。你不用待在任何房間，每間房都看得到。
-- 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。
+- 用 `{room_cmd} <指令> --session {session} --room <房號>`：`read` 看某間房的紀錄、`say` 回話到那間房（不用進房）、`who`、`board`、`threads`。訊息裡有 $、反引號或驚嘆號（例如金額 $13.10）時，雙引號會被 shell 改掉，改用 `say - <<'EOF'`（下一行起寫訊息，最後一行寫 EOF）。
 - 派房：`create <房名> --owner <名字>`（開房、指定{owner_label}，你不進去）、`move <名字> <房號|none>`、`spawn <名字> "<派工>" --role "<在做什麼>" --room <房號>`、`off|on <名字>`、`role <名字> "<在做什麼>"`、`resume`、`hops <房號> <次數|off>`。你不能用 {user} 的身分發言，回話都是你自己。
 - 你不改任何程式、不修房間工具；房間工具的問題寫「@{maintainer}」找維修，專案的實作交給該房的{owner_label}或成員。
 - 有人 @你、有人 @{user_id}（在等 {user}）、房間暫停，都會叫醒你；其他事你每一輪會在總覽裡看到。
@@ -593,7 +593,7 @@ def main(argv=None):
     sub.add_parser("rooms")
     sub.add_parser("who")
     s = sub.add_parser("read"); s.add_argument("--since", type=int, default=0); s.add_argument("--limit", type=int, default=200)
-    s = sub.add_parser("say"); s.add_argument("text", nargs="?", default="")
+    s = sub.add_parser("say"); s.add_argument("text", nargs="?", default="", help="- 是從 stdin 讀（訊息裡有 $ 或反引號時用 <<'EOF'，shell 不會改字）")
     s.add_argument("--file", action="append", metavar="PATH", help="附檔案（圖片、任何檔，可以重複）")
     s = sub.add_parser("board"); s.add_argument("--set", metavar="FILE", help="用檔案內容取代白板（- 是 stdin）")
     s = sub.add_parser("tools", help="這間房接上的本機工具：網址、repo、怎麼啟動、程式圖（--map 工具代號 印出那個 repo 的程式圖）")
@@ -752,7 +752,8 @@ def main(argv=None):
             with open(path, "rb") as fh:
                 files.append(call("POST", f"/api/rooms/{room}/upload", actor, name=os.path.basename(path),
                                   data=base64.b64encode(fh.read()).decode()))
-        return show(call("POST", f"/api/rooms/{room}/post", actor, text=a.text, files=files or None))
+        text = sys.stdin.read().rstrip("\n") if a.text == "-" else a.text
+        return show(call("POST", f"/api/rooms/{room}/post", actor, text=text, files=files or None))
     if a.cmd == "board":
         if a.set:
             text = sys.stdin.read() if a.set == "-" else open(a.set, encoding="utf-8").read()

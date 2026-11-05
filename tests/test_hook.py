@@ -77,5 +77,21 @@ class RecordTurnTest(unittest.TestCase):
         self.assertEqual([(r["who"], r["text"]) for r in rows], [("agent", "A 或 B？"), ("user", "選 B")])
         self.assertEqual(oct(os.stat(os.path.join(d, "turns", files[0])).st_mode & 0o777), "0o600")
 
+
+class SayFromStdinTest(unittest.TestCase):
+    def test_dollar_amount_survives_when_read_from_stdin(self):
+        # 雙引號裡的 $1 會被 shell 換掉（$13.10 變 3.10）；say - 從 stdin 讀，字原封不動
+        import io, subprocess
+        from unittest import mock
+        from rooms import cli
+        got = subprocess.run(["bash", "-c", "cat <<'EOF'\n餘額是 $13.10，`date` 不跑\nEOF"], capture_output=True, text=True).stdout
+        sent = {}
+        def fake_call(method, path, actor=None, **kw):
+            sent.update(kw); return {}
+        with mock.patch.object(cli, "call", side_effect=fake_call), mock.patch.object(cli, "show"), \
+                mock.patch.object(cli.sys, "stdin", io.StringIO(got)):
+            cli.main(["say", "-", "--session", "s-1", "--room", "R1"])
+        self.assertEqual(sent["text"], "餘額是 $13.10，`date` 不跑")
+
 if __name__ == "__main__":
     unittest.main()
