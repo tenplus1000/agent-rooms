@@ -444,6 +444,20 @@ class HookTest(LiveServer):
         again = self.run_hook("s-claude", "UserPromptSubmit")
         self.assertNotIn("房間的新訊息", again)                          # 補過的不再補
 
+    def test_message_survives_a_hook_that_dies_before_its_output_lands(self):
+        self.core.post(USER, self.room, "別掉")
+        with mock.patch.object(cli, "_ack_shown", side_effect=SystemExit):   # 輸出前後被砍掉：還沒 ack
+            with self.assertRaises(SystemExit):
+                self.run_hook("s-claude", "UserPromptSubmit")
+        self.assertIn("別掉", self.run_hook("s-claude", "UserPromptSubmit"))
+        self.assertNotIn("別掉", self.run_hook("s-claude", "UserPromptSubmit"))   # 真的送到之後就不再送
+
+    def test_message_stays_when_core_is_too_slow_for_the_time_budget(self):
+        self.core.post(USER, self.room, "慢也不掉")
+        with mock.patch.object(cli, "HOOK_BUDGET", 0):
+            self.assertIsNone(self.run_hook("s-claude", "UserPromptSubmit"))
+        self.assertIn("慢也不掉", self.run_hook("s-claude", "UserPromptSubmit"))
+
     def test_stop_hook_waits_and_wakes_on_mention(self):
         self.core.post(USER, self.room, "@工人 只是背景")                 # 沒找主持，不叫醒
         self.core.post("s-cx", self.room, "@主持 有問題")

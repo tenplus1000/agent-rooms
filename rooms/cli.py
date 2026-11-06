@@ -253,6 +253,8 @@ def record_turn(payload, event_name, session):
 
 def hook():
     """hook 不能擋住使用者：任何錯誤都不輸出、exit 0。"""
+    global _hook_deadline
+    _hook_deadline = time.monotonic() + HOOK_BUDGET
     try:
         payload = json.loads(sys.stdin.read() or "{}")
         session = payload.get("session_id", "")
@@ -265,6 +267,7 @@ def hook():
             pass                  # 記不了也不能擋住對話
         if event_name in ("Stop", "SessionStart"):
             # Stop：每輪做完就等房間；SessionStart：剛開或 resume、還沒跑過任何一輪的對話也要等得到
+            _hook_deadline = None    # 這條會一直等房間，時限不適用
             return rewake(session)
         full = event_name == "UserPromptSubmit"
         overview = _quick("GET", "/api/overview", {})
@@ -287,7 +290,7 @@ def hook():
         if user_typed and me.get("off"):
             _quick("POST", "/api/off", {"as": session, "session": session, "on": "0"})   #使用者回到這個對話了
         #使用者開口那一輪：把累積的都補上；做事中途：只有該叫醒他時才插話
-        got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "1",
+        got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "1", "consume": "0",
                                             "triggers_only": "0" if full else "1"})
         lines = [line_for(e, room["name"]) for e in (got or {}).get("events", [])]
         room_cmd = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "room")
@@ -304,7 +307,8 @@ def hook():
         if not parts or (not full and not lines):
             return
         print(json.dumps({"hookSpecificOutput": {"hookEventName": event_name,
-                                                 "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False))
+                                                 "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False), flush=True)
+        _ack_shown(session, got)
     except Exception:
         return
 
@@ -362,7 +366,7 @@ def call_of(session, g, overview):
 
 def global_hook(session, event_name, full, overview):
     """全域角色：不用待在房裡。開口那一輪給規則＋每間房的總覽＋找它的訊息；做事中途只在有人找它時插話。"""
-    got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "1",
+    got = _quick("GET", "/api/listen", {"session": session, "wait": "0", "heartbeat": "1", "consume": "0",
                                         "triggers_only": "0" if full else "1"})
     names = {r["room_id"]: r["name"] for r in overview["rooms"]}
     lines = [line_for(e, names) for e in (got or {}).get("events", [])]
@@ -382,7 +386,8 @@ def global_hook(session, event_name, full, overview):
     if lines:
         parts.append("找你的訊息：\n" + "\n".join(lines))
     print(json.dumps({"hookSpecificOutput": {"hookEventName": event_name,
-                                             "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False))
+                                             "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False), flush=True)
+    _ack_shown(session, got)
 
 
 def summary_of(overview):
@@ -446,26 +451,45 @@ def rewake(session):
             continue
         if not mine():
             return                          # 已經有新的等待者接手
-        last = {}
-        for e in got["events"]:
-            last[e["room_id"]] = max(last.get(e["room_id"], 0), e["seq"])
-        for room_id, seq in last.items():
-            try:
-                call("POST", "/api/ack", session=session, room_id=room_id, seq=seq)
-            except (CoreDown, SystemExit):
-                pass
         names = {r["room_id"]: r["name"] for r in (_quick("GET", "/api/rooms", {"as": session}) or [])}
         lines = [line_for(e, names) for e in got["events"]]
         sys.stderr.write("\n".join(lines) + "\n")
         sys.stderr.flush()
+        for room_id, seq in _last_seqs(got).items():
+            try:
+                call("POST", "/api/ack", session=session, room_id=room_id, seq=seq)
+            except (CoreDown, SystemExit):
+                pass
         sys.exit(2)
 
 
+def _last_seqs(got):
+    last = {}
+    for e in (got or {}).get("events", []):
+        last[e["room_id"]] = max(last.get(e["room_id"], 0), e["seq"])
+    return last
+
+
+def _ack_shown(session, got):
+    """訊息真的輸出了才算讀過：hook 被逾時砍掉、回應半路斷掉，訊息都還留著，下一輪再送。"""
+    for room_id, seq in _last_seqs(got).items():
+        _quick("POST", "/api/ack", {"session": session, "room_id": room_id, "seq": seq})
+
+
+HOOK_BUDGET = 4.0        # 短的 hook 只有 5 秒，超過整個輸出會被丟掉：一次跑完幾個呼叫都算在這裡面
+_hook_deadline = None
+
+
 def _quick(method, path, params):
-    """hook 用：兩秒內沒回就算了，不能拖慢使用者。"""
+    """hook 用：兩秒內沒回就算了，不能拖慢使用者；加起來也不超過 HOOK_BUDGET。"""
     url = BASE + path + "?" + urllib.parse.urlencode(params)
+    wait = 2.0
+    if _hook_deadline is not None:
+        wait = min(wait, _hook_deadline - time.monotonic())
+        if wait <= 0.05:
+            return None
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, method=method), timeout=2) as resp:
+        with urllib.request.urlopen(urllib.request.Request(url, method=method), timeout=wait) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
