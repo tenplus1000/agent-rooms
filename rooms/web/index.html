@@ -17,12 +17,14 @@ button { font: inherit; color: var(--text); background: var(--panel2); border: 1
   border-radius: 6px; padding: 4px 10px; cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button.danger:hover { border-color: var(--bad); color: var(--bad); }
-#top { position: fixed; top: 0; left: 0; right: 0; height: 44px; display: flex; align-items: center; gap: 10px;
+#top { position: fixed; top: 0; left: 0; right: 0; min-height: 44px; display: flex; align-items: center; gap: 10px;
   padding: 0 14px; background: rgba(14, 17, 22, 0.9); border-bottom: 1px solid var(--line); z-index: 20; }
 #top .title { font-weight: 600; letter-spacing: 1px; }
 #top .hint { color: var(--dim); font-size: 12px; margin-left: auto; cursor: help; border: 1px solid var(--line);
   border-radius: 50%; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; }
-#outside { display: flex; align-items: center; gap: 8px; overflow-x: auto; min-width: 0; flex: 1; scrollbar-width: none; }
+/* 人多就換行，整排跟著長高；真的太多才在這排裡捲，捲軸看得到 */
+#outside { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; overflow: hidden auto; min-width: 0; flex: 1;
+  max-height: 40vh; padding: 7px 8px 3px 0; scrollbar-width: thin; }
 .gchip { border: 1px solid var(--warn); color: var(--text); background: rgba(240,183,47,0.07); border-radius: 14px;
   padding: 2px 12px; cursor: pointer; white-space: nowrap; font-weight: 600; position: relative; }
 .gchip.on { background: rgba(240,183,47,0.28); }
@@ -62,7 +64,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 .tidy-row button { font-size: 11px; padding: 1px 8px; }
 .tidy-row .who small.why { color: var(--warn); }
 .tidy-judge { color: var(--text); }
-#stage { position: fixed; top: 44px; left: 0; right: 0; bottom: 96px; overflow: hidden; touch-action: none; cursor: grab; }
+#stage { position: fixed; top: var(--top-h, 44px); left: 0; right: 0; bottom: 96px; overflow: hidden; touch-action: none; cursor: grab; }
 #stage.panning { cursor: grabbing; }
 #world { position: absolute; left: 0; top: 0; width: 2600px; height: 1700px; transform-origin: 0 0; }
 #world svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; }   /* 房間可以放到任何地方，不會被切掉 */
@@ -76,7 +78,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 .tool-ball .nm { font-size: 10px; color: var(--dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tool-ball.on .orb { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tool-group { position: fixed; z-index: 16; font-size: 10px; color: var(--dim); width: 96px; text-align: right; white-space: nowrap; pointer-events: none; }
-#toolpane { position: fixed; top: 44px; bottom: 96px; right: 70px; width: min(460px, 42vw); z-index: 18; display: none;
+#toolpane { position: fixed; top: var(--top-h, 44px); bottom: 96px; right: 70px; width: min(460px, 42vw); z-index: 18; display: none;
   flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); box-shadow: -10px 0 30px rgba(0,0,0,.45); }
 #toolpane header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--line); }
 #toolpane header .t { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -84,7 +86,7 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 #toolpane .body { flex: 1; overflow: auto; padding: 10px 12px; }
 #toolpane pre { white-space: pre-wrap; font-size: 12px; margin: 0; }
 .seg { display: flex; gap: 6px; margin-bottom: 10px; }
-#quota { position: fixed; left: 8px; top: 54px; width: 150px; pointer-events: none; z-index: 16; display: none; flex-direction: column; gap: 6px; }
+#quota { position: fixed; left: 8px; top: calc(var(--top-h, 44px) + 10px); width: 150px; pointer-events: none; z-index: 16; display: none; flex-direction: column; gap: 6px; }
 #quota .qh { pointer-events: auto; font-size: 10px; color: var(--dim); display: flex; justify-content: space-between; align-items: center; }
 #quota .qh b { cursor: pointer; font-weight: 400; }
 .qcard { pointer-events: auto; background: rgba(20,24,31,0.88); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; cursor: pointer; font-size: 11px; }
@@ -187,13 +189,14 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 108px; background: var(--panel2); border: 1px solid var(--line);
   padding: 6px 12px; border-radius: 8px; z-index: 60; display: none; }
 @media (max-width: 700px) {
-  #top { gap: 6px; padding: 0 8px; }
+  #top { gap: 6px; padding: 0 8px; flex-wrap: wrap; }
+  #outside { order: 1; flex-basis: 100%; }
   #fit { display: none; }
   #bar { gap: 6px; padding: 10px 8px; }
   #target { min-width: 0; max-width: 92px; padding: 0 6px; }
   #target .v { font-size: 12px; white-space: normal; }
   #send { min-width: 52px; }
-  .win { left: 8px !important; right: 8px; width: auto; top: 54px !important; height: calc(100% - 170px); }
+  .win { left: 8px !important; right: 8px; width: auto; top: calc(var(--top-h, 44px) + 10px) !important; height: calc(100% - var(--top-h, 44px) - 126px); }
 }
 </style>
 </head>
@@ -325,6 +328,7 @@ function askKey() {
 
 // ── 小工具 ───────────────────────────────────────
 const $ = id => document.getElementById(id);
+const topH = () => $("top").offsetHeight;
 const el = (tag, attrs = {}, ...kids) => {
   const svg = ["svg", "g", "path", "circle", "text", "rect", "polygon", "line", "ellipse", "title", "defs", "radialGradient",
     "stop", "filter", "feGaussianBlur"].includes(tag);
@@ -497,7 +501,7 @@ function drawDot(g, m, [x, y], room, isOwner, small) {
   g.append(dot);
 }
 function drawOutside() {
-  const box = $("outside"); box.replaceChildren();
+  const box = $("outside"), keep = box.scrollTop; box.replaceChildren();   // 每次更新都重畫：捲到哪裡要留著
   document.querySelectorAll(".bubble.fixed").forEach(b => b.remove());
   for (const gl of globals()) {
     const desk = S.ov.rooms.find(r => r.desk === gl.sid);
@@ -525,6 +529,7 @@ function drawOutside() {
     chip.addEventListener("pointerdown", e => startDotDrag(e, a, null));
     box.append(chip);
   }
+  box.scrollTop = keep;
 }
 
 // ── 整理下線的人 ─────────────────────────────────
@@ -827,7 +832,7 @@ function dragWin(win) {
   head.addEventListener("pointerdown", e => {
     if (e.target.tagName === "BUTTON") return;
     const sx = e.clientX - win.offsetLeft, sy = e.clientY - win.offsetTop;
-    const move = ev => { win.style.left = ev.clientX - sx + "px"; win.style.top = Math.max(44, ev.clientY - sy) + "px"; };
+    const move = ev => { win.style.left = ev.clientX - sx + "px"; win.style.top = Math.max(topH(), ev.clientY - sy) + "px"; };
     const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
     addEventListener("pointermove", move); addEventListener("pointerup", up);
   });
@@ -1348,7 +1353,7 @@ function toolKinds() { return (S.ov && S.ov.tool_kinds) || { dashboard: "儀表�
 function drawTools() {
   const dock = $("tooldock"); dock.replaceChildren();
   const tools = (S.ov && S.ov.tools) || [];
-  let y = 58;
+  let y = topH() + 14;
   const bottom = innerHeight - 110;
   for (const [kind, label] of Object.entries(toolKinds())) {
     const mine = tools.filter(t => t.category === kind);
@@ -1357,7 +1362,7 @@ function drawTools() {
     y += 16;
     for (const t of mine) {
       let x, ty;
-      if (t.pos) { [x, ty] = t.pos; x = Math.min(Math.max(0, x), innerWidth - 44); ty = Math.min(Math.max(46, ty), bottom); }
+      if (t.pos) { [x, ty] = t.pos; x = Math.min(Math.max(0, x), innerWidth - 44); ty = Math.min(Math.max(topH() + 2, ty), bottom); }
       else { x = innerWidth - 56; ty = y; y += 58; }
       dock.append(toolBall(t, x, ty));
     }
@@ -1739,6 +1744,13 @@ refreshLocal().then(refreshToolStatus).then(() => refreshAccounts());
 setInterval(() => refreshLocal().then(refreshToolStatus), 30000);
 setInterval(() => refreshAccounts(), 60000);
 addEventListener("resize", () => drawTools());
+// 上面那排換行變高時，畫面、工具和開著的視窗跟著往下讓
+new ResizeObserver(() => {
+  const h = topH();
+  document.documentElement.style.setProperty("--top-h", h + "px");
+  document.querySelectorAll(".win").forEach(w => { if (w.offsetTop < h) w.style.top = h + "px"; });
+  drawTools(); placeRoombar();
+}).observe($("top"));
 </script>
 </body>
 </html>

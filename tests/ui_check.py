@@ -502,6 +502,38 @@ try:
     check("接受後少一則", "等你決定 1" in (js("document.querySelector('#quota').innerText") or ""))
     key("Escape"); time.sleep(0.4)
     fake.terminate()
+    # 上面那排人再多，最後新開的也看得到、拖得動
+    def spawn(a, b):
+        for i in range(a, b):
+            call("POST", "/api/register", session=f"n{i}", kind="claude", name=f"新開成員{i}")
+            call("POST", "/api/touch", session=f"n{i}")
+        time.sleep(3.2)
+    def last_chip_ok():
+        return js("""(() => { const c = [...document.querySelectorAll('#outside .lchip')].pop(), o = document.getElementById('outside');
+            const b = c.getBoundingClientRect(), v = o.getBoundingClientRect();
+            return b.left >= v.left && b.right <= v.right + 1 && b.top >= v.top && b.bottom <= v.bottom + 1 && b.right <= innerWidth; })()""")
+    spawn(0, 60)
+    check("60 人：最後一個完整看得到", last_chip_ok())
+    check("60 人：不用捲", js("(() => { const o = document.getElementById('outside'); return o.scrollHeight <= o.clientHeight + 1; })()"))
+    check("畫面跟著頂列往下讓", js("Math.abs(document.getElementById('stage').getBoundingClientRect().top - document.getElementById('top').offsetHeight) < 1 && document.getElementById('top').offsetHeight > 44"))
+    shot("頂列60人")
+    spawn(60, 300)
+    check("300 人：頂列不超過畫面四成多", js("document.getElementById('top').offsetHeight <= innerHeight * 0.45"))
+    js("(() => { const o = document.getElementById('outside'); o.scrollTop = o.scrollHeight; })()"); time.sleep(0.3)
+    check("300 人：捲到底看得到最後一個", last_chip_ok())
+    time.sleep(3.2)
+    check("300 人：更新後不會捲回去", last_chip_ok())
+    shot("頂列300人")
+    js("document.getElementById('fit').click()"); time.sleep(0.6)
+    goal = js("""(() => { const g = document.querySelector('[data-room]'); const ps = g.querySelectorAll('polygon'); const p = ps[ps.length - 1];
+        const b = p.getBoundingClientRect(); return [g.dataset.room, b.left + b.width / 2, b.top + b.height / 2]; })()""")
+    check("全部看得到：房間在頂列底下", goal[2] > js("document.getElementById('top').offsetHeight"))
+    drag(center('#outside [data-session="n299"]'), goal[1:]); time.sleep(1.5)
+    check("最後一個拖得進房", next(x for x in call("GET", "/api/overview")["agents"] if x["session"] == "n299")["room_id"] == goal[0])
+    ws.cdp("Emulation.setDeviceMetricsOverride", width=420, height=800, deviceScaleFactor=1, mobile=False); time.sleep(1)
+    js("(() => { const o = document.getElementById('outside'); o.scrollTop = o.scrollHeight; })()"); time.sleep(0.3)
+    check("窄窗：最後一個看得到", last_chip_ok())
+    shot("頂列窄窗")
     shot("結束")
 finally:
     chrome.terminate(); core.terminate()
