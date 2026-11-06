@@ -196,8 +196,9 @@ def _outside(host, found, conf, tails):
         return next((rule["why"] for rule in ignore if re.search(rule["match"], text)), None)
 
     outside, skipped = [], 0
+    store = base() + os.sep                    # 開關自己放 key 的地方
     for path, ft in found["files"].items():
-        if not set(ft) & tails or path in listed or any(path.endswith(p.lstrip("~")) for p in listed):
+        if path.startswith(store) or not set(ft) & tails or path in listed or any(path.endswith(p.lstrip("~")) for p in listed):
             continue
         if why(path):
             skipped += 1

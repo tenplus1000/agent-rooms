@@ -157,6 +157,9 @@ class KeySwitch(unittest.TestCase):
                                                            "ignore": [{"match": r"\.bak$", "why": "舊備份"}]}))
         got = keyswitch.scan()
         self.assertEqual([o["where"] for o in got["outside"]], [str(tree / "new.env")])
+        outside, _ = keyswitch._outside("", {"files": {str(self.dir / "key1"): ["111"]}, "containers": []},
+                                        {"targets": []}, {"111"})
+        self.assertEqual(outside, [])                              # 開關自己放 key 的地方不算名單外
         self.assertEqual(got["outside"][0]["tails"], ["222"])
         self.assertEqual(got["skipped"], 1)
         self.assertNotIn(K2, json.dumps(got))
