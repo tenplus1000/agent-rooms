@@ -95,6 +95,14 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 .qcard .nm small { color: var(--dim); font-weight: 400; }
 .qcard .row { display: flex; align-items: center; gap: 5px; margin-top: 2px; color: var(--dim); }
 .qcard .row span:first-child { width: 22px; }
+.keybtns { display: flex; gap: 4px; }
+.keybtn { flex: 1; padding: 2px 4px; font-size: 11px; white-space: nowrap; }
+.qcard .keybtns { flex-direction: column; }
+.keyp .keybtns { gap: 8px; margin-bottom: 6px; }
+.keyp .keybtn { font-size: 14px; padding: 6px; }
+.keybtn.on { background: var(--accent); color: #0b1220; font-weight: 700; border-color: var(--accent); }
+.keytail { color: var(--dim); font-size: 12px; white-space: nowrap; }
+.keyok { color: #5ad07a; font-weight: 700; } .keybad { color: var(--bad); font-weight: 700; white-space: nowrap; font-size: 12px; }
 .qcard .bar { flex: 1; height: 5px; background: var(--bg); border-radius: 3px; overflow: hidden; }
 .qcard .bar i { display: block; height: 100%; border-radius: 3px; }
 .qcard .pct { width: 30px; text-align: right; color: var(--text); }
@@ -1249,16 +1257,100 @@ function resetText(iso) {                // 今天的只寫幾點；其他寫月
   const today = new Date().toDateString() === t.toDateString();
   return `${today ? hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`} 重置`;
 }
+// ── OpenRouter key 總開關：切一次，所有專案一起換（頁面只看得到尾三碼）──────────
+async function refreshKeys(check) {
+  if (!S.local) return;
+  try { S.keys = await local("GET", "/local/keys", check ? { check: "1" } : {}); drawQuota(); } catch (e) {}
+}
+function keyTail(slot) { return ((S.keys.keys || []).find(k => k.slot === String(slot)) || {}).tail || "?"; }
+function keyButtons() {
+  return (S.keys.keys || []).map(k => el("button", { class: "keybtn" + (String(S.keys.active) === k.slot ? " on" : ""), "data-key": k.slot,
+    text: `key${k.slot} …${k.tail}`, on: { click: e => { e.stopPropagation(); switchKey(k.slot); } } }));
+}
+function keyCard() {
+  const bad = (S.keys.targets || []).filter(t => !t.ok).length, out = ((S.keys.scan || {}).outside || []).length;
+  const warn = S.keys.checked && !S.keys.active ? "還沒切過" : (S.keys.pending || []).length ? `待補 ${S.keys.pending.join("、") || "這台"}`
+    : S.keys.checked && bad ? `${bad} 處沒對上` : out ? `名單外 ${out} 處` : "";
+  const card = el("div", { class: "qcard" + (warn ? " hot" : ""), "data-keycard": "1", style: "cursor:pointer", title: "看所有用到 key 的地方" },
+    el("div", { style: "font-weight:600;margin-bottom:4px", text: "OpenRouter key ▸" }),
+    el("div", { class: "keybtns" }, ...keyButtons()), warn ? el("div", { class: "err", text: warn }) : null);
+  card.addEventListener("click", () => keyPanel());
+  return card;
+}
+async function switchKey(slot) {
+  const n = (S.keys.targets || []).length;
+  const yes = await dialog({ title: `全部換成 key${slot} …${keyTail(slot)}？`, ok: "換", pre: true,
+    text: `${n} 個地方一起換。有服務要重啟的，沒人在用才重啟；有人在用就等，每 5 分鐘再試。\n進行中的遊戲局帶著開局時的 key，撞到沒錢才換備用。` });
+  if (!yes) return;
+  toast("切換中…");
+  try { S.keys = await local("POST", "/local/keys/switch", { slot }); }
+  catch (e) { return toast("沒成功：" + e.message); }
+  drawQuota();
+  const bad = (S.keys.targets || []).filter(t => !t.ok).length;
+  toast(bad ? `換到 key${slot}，${bad} 處還沒對上，看清單` : `全部換到 key${slot} 了`);
+  if (S.keyPanelOpen) { closeTop(); }
+  keyPanel(true);
+}
+async function keyPanel(noCheck) {
+  const body = el("div", { class: "scroll" });
+  const head = el("div", { class: "keybtns" });
+  const box = el("div", { class: "dialog wide accp keyp" }, el("h3", { text: "OpenRouter key" }), head, body,
+    el("div", { class: "row", style: "margin-top:10px" },
+      el("button", { text: "重查", on: { click: () => fill(true) } }),
+      el("button", { text: "再掃一次全部機器", "data-keyscan": "1", on: { click: async () => {
+        await local("POST", "/local/keys/scan", {}); toast("開始掃了，要幾分鐘；掃完這裡會更新"); } } }),
+      el("button", { text: "關閉", on: { click: () => closeTop() } })));
+  const layer = el("div", { class: "layer" }, box);
+  layer.addEventListener("pointerdown", e => { if (e.target === layer) closeTop(); });
+  function row(t) {
+    const want = keyTail(S.keys.active);
+    const state = t.offline ? "連不上" : t.ok ? "✓" : "✗";
+    const seen = t.tails.length ? t.tails.map(x => "…" + x).join("、") : "—";
+    return el("div", { class: "tidy-row", "data-target": t.id },
+      el("span", { class: "who", style: "cursor:default" }, el("b", { text: t.project }),
+        el("small", { text: `${t.host}${t.path ? "・" + t.path : ""}` }),
+        t.note ? el("small", { text: t.note }) : null,
+        t.error || t.problems.length ? el("small", { class: "why", text: t.error || t.problems.join("、") }) : null),
+      el("span", { class: "keytail", text: seen }),
+      el("span", { class: t.ok ? "keyok" : "keybad", text: state, title: S.keys.active ? `應該是 …${want}` : "還沒切過" }));
+  }
+  function draw() {
+    head.replaceChildren(...keyButtons());
+    const scan = S.keys.scan || {}, rows = S.keys.targets || [];
+    body.replaceChildren(el("h4", { text: `用到 key 的地方（${rows.length}）` }), ...rows.map(row));
+    if ((S.keys.pending || []).length) body.append(el("div", { class: "box ask", text: `還沒補上：${S.keys.pending.map(h => h || "這台").join("、")}。連得上、沒人在用就會自動補，每 5 分鐘試一次。` }));
+    body.append(el("h4", { text: "掃描" }));
+    if (!scan.at) body.append(el("div", { class: "box", text: "還沒掃過。" }));
+    else {
+      body.append(el("div", { class: "box", text: `${new Date(scan.at * 1000).toLocaleString()} 掃了 ${scan.scanned} 個檔案；名單外 ${(scan.outside || []).length} 處；略過 ${scan.skipped} 處（舊備份、紀錄檔、免費池）` +
+        ((scan.offline || []).length ? `；連不上：${scan.offline.join("、")}` : "") }));
+      for (const o of scan.outside || []) body.append(el("div", { class: "box ask", "data-outside": "1", text: `名單外：${o.host}・${o.where}（${o.tails.map(x => "…" + x).join("、")}）` }));
+    }
+  }
+  async function fill(check) {
+    if (check) {
+      body.replaceChildren(el("div", { class: "box", text: "連到各機器查實際用哪一把…" }));
+      await refreshKeys(true);
+    }
+    if (layer.isConnected) draw();
+  }
+  document.body.append(layer);
+  S.keyPanelOpen = true;
+  pushLayer(() => { layer.remove(); S.keyPanelOpen = false; });
+  if (noCheck) draw(); else fill(true);
+}
+
 function drawQuota() {
   const box = $("quota"); box.replaceChildren();
   const n = (S.loose || []).length;
-  if (!S.accounts && !n) { box.style.display = "none"; return; }
+  if (!S.accounts && !n && !(S.keys && S.keys.configured)) { box.style.display = "none"; return; }
   box.style.display = "flex";
   if (n) {                                          // 掛不到任何點上的建議：收起額度欄也照樣看得到
     const card = el("div", { class: "qcard hot", style: "padding:4px 8px;cursor:pointer", title: "不屬於畫面上任何對話的建議", text: `等你決定 ${n} ▸` });
     card.addEventListener("click", () => loosePanel());
     box.append(card);
   }
+  if (S.keys && S.keys.configured) box.append(keyCard());
   if (!S.accounts) return;
   if (store.get("quotaHidden", false)) {           // 收起來：只留一個小標籤，點了再打開
     const tab = el("div", { class: "qcard", style: "padding:3px 8px;align-self:flex-start", title: "打開帳號額度", text: "額度 ▸" });
@@ -1740,7 +1832,8 @@ $("fit").addEventListener("click", fitAll);
 setupView();
 refresh();
 setInterval(refresh, 2500);
-refreshLocal().then(refreshToolStatus).then(() => refreshAccounts());
+refreshLocal().then(refreshToolStatus).then(() => refreshAccounts()).then(() => refreshKeys(true));
+setInterval(() => refreshKeys(), 60000);
 setInterval(() => refreshLocal().then(refreshToolStatus), 30000);
 setInterval(() => refreshAccounts(), 60000);
 addEventListener("resize", () => drawTools());

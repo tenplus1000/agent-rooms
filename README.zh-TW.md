@@ -179,7 +179,9 @@ curl -H "Authorization: Bearer $(cat <鑰匙檔>)" http://127.0.0.1:8776/api/ove
 | `ROOMS_DATA_DIR` | container 的資料資料夾，預設 `./data` |
 | `ROOMS_JUDGE` | `off` 關掉判官（沒 @ 的訊息改成叫醒負責人） |
 | `ROOMS_JUDGE_URL`／`ROOMS_JUDGE_MODEL` | 判官端點與模型，預設 OpenRouter 的 `typesafe/jev-1.13` |
+| `ROOMS_JUDGE_KEY_FILE` | 判官金鑰檔，每一發重讀，換檔不用重啟 |
 | `ROOMS_JUDGE_KEY` | 判官金鑰；沒設就用 `OPENROUTER_API_KEY` |
+| `ROOMS_KEYS_DIR` | key 總開關的設定資料夾，預設 `~/.config/agent-rooms/openrouter`（`key1`、`key2`、`targets.json`，都不進 repo）；有設定才會在左欄出現開關 |
 | `ACC_SESSIONS` | [acc](https://github.com/tenplus1000/acc) 的 session 資料夾：用來判斷使用者剛在哪個對話講過話 |
 | `ROOMS_WINDOWS_HOME` | WSL 上的 Windows 使用者資料夾（預設自動找） |
 | `ROOMS_CODEX_HOMES` | 用冒號分隔的 Codex 帳號（`CODEX_HOME`）清單，預設 `~/.codex`；每項可寫成 `名字=路徑`，名字給 `spawn --account` 用 |

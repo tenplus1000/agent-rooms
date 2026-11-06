@@ -19,6 +19,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -323,6 +324,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(tool_map(q.get("id", "")))
             if url.path == "/local/accounts":
                 return self._send(accounts_view(q.get("force") == "1"))
+            if url.path == "/local/keys":
+                from rooms import keyswitch
+                return self._send(keyswitch.view(q.get("check") == "1"))
             if url.path == "/local/loose":
                 return self._send(loose([s for s in q.get("sids", "").split(",") if s]))
             if url.path == "/local/badges":
@@ -348,6 +352,13 @@ class Handler(BaseHTTPRequestHandler):
                 from rooms import quota
                 quota.remove(data.get("name", ""))
                 return self._send(accounts_view())
+            if urlparse(self.path).path == "/local/keys/switch":
+                from rooms import keyswitch
+                return self._send(keyswitch.switch(data.get("slot")))
+            if urlparse(self.path).path == "/local/keys/scan":
+                from rooms import keyswitch
+                threading.Thread(target=keyswitch.scan, daemon=True).start()
+                return self._send({"started": True})
             if urlparse(self.path).path == "/local/tools/stop":
                 return self._send(stop_tool(data.get("id", "")))
             if urlparse(self.path).path == "/local/tools/restart":
@@ -360,6 +371,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port=PORT):
+    from rooms import keyswitch
+    keyswitch.background()
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 
 

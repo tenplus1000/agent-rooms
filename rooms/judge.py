@@ -9,6 +9,7 @@
   ROOMS_JUDGE=off        關掉判官（沒 @ 的訊息退回叫負責人）
   ROOMS_JUDGE_URL        端點，預設 OpenRouter 的 decisions
   ROOMS_JUDGE_MODEL      模型，預設 typesafe/jev-1.13
+  ROOMS_JUDGE_KEY_FILE   金鑰檔，每一發重讀，換檔不用重啟；優先於下面兩個
   ROOMS_JUDGE_KEY        金鑰；沒設就用 OPENROUTER_API_KEY
   ROOMS_JUDGE_TIMEOUT    秒數，預設 8
 """
@@ -40,6 +41,15 @@ def _url():
 
 
 def _key():
+    path = os.environ.get("ROOMS_JUDGE_KEY_FILE", "").strip()
+    if path:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                got = fh.read().strip()
+            if got:
+                return got
+        except OSError:
+            pass
     return os.environ.get("ROOMS_JUDGE_KEY", "").strip() or os.environ.get("OPENROUTER_API_KEY", "").strip()
 
 

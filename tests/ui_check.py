@@ -451,7 +451,17 @@ try:
 
     # 本機小幫手（acc、判斷層的建議）：假的小幫手，a1 有兩則等決定
     loose_file = os.path.join(data, "loose.json")
-    fake = subprocess.Popen([sys.executable, "-c", FAKE_LOCAL], env=dict(env, ROOMS_LOCAL_ORIGINS=BASE, LOOSE_FILE=loose_file),
+    # key 總開關：真的 keyswitch，暫存資料夾、假 key
+    keys_dir = tempfile.mkdtemp()
+    KA, KB = "sk-or-v1-" + "a" * 61 + "aaa", "sk-or-v1-" + "b" * 61 + "bbb"
+    open(keys_dir + "/key1", "w").write(KA); open(keys_dir + "/key2", "w").write(KB)
+    far = keys_dir + "/app.env"; open(far, "w").write(f"A=1\nP={KA}\nQ={KB}\n")
+    raw = keys_dir + "/raw.key"; open(raw, "w").write(KA)
+    open(keys_dir + "/targets.json", "w").write(json.dumps({"hosts": {"": {"via": [], "scan": [keys_dir + "/tree"]}}, "targets": [
+        {"id": "raw", "project": "判官甲", "path": raw, "mode": "raw", "note": "每一發重讀"},
+        {"id": "env", "project": "主站乙", "host": "", "path": far, "var": "P", "backup_var": "Q"}]}))
+    os.makedirs(keys_dir + "/tree"); open(keys_dir + "/tree/new.env", "w").write(f"X={KB}\n")
+    fake = subprocess.Popen([sys.executable, "-c", FAKE_LOCAL], env=dict(env, ROOMS_LOCAL_ORIGINS=BASE, LOOSE_FILE=loose_file, ROOMS_KEYS_DIR=keys_dir),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
     js("localStorage.setItem('rooms.localUrl', JSON.stringify('http://127.0.0.1:8797')); location.reload()"); time.sleep(3)
@@ -465,9 +475,9 @@ try:
     time.sleep(1.2)
     check("畫面上加帳號", "朋友的" in (js("document.querySelector('#quota').innerText") or ""))
     js("[...document.querySelectorAll('#quota .qh b')].pop().click()"); time.sleep(0.4)
-    check("額度欄可以收起來", js("document.querySelectorAll('#quota .qcard').length") == 1 and "額度" in (js("document.querySelector('#quota').innerText") or ""))
-    js("document.querySelector('#quota .qcard').click()"); time.sleep(0.4)
-    check("收起來後點標籤再打開", js("document.querySelectorAll('#quota .qcard').length") >= 3)
+    check("額度欄可以收起來", js("document.querySelectorAll('#quota .qcard:not([data-keycard])').length") == 1 and "額度" in (js("document.querySelector('#quota').innerText") or ""))
+    js("document.querySelector('#quota .qcard:not([data-keycard])').click()"); time.sleep(0.4)
+    check("收起來後點標籤再打開", js("document.querySelectorAll('#quota .qcard:not([data-keycard])').length") >= 3)
     # 沒有邊界：房間拖到左上角外面也整間畫得出來
     call("POST", f"/api/rooms/{r1}/pos", x=-500, y=-400); time.sleep(3)
     js("fitAll()"); time.sleep(0.6)
@@ -500,6 +510,29 @@ try:
     shot("掛不到點上的建議")
     js("[...document.querySelectorAll('.accp .pick2 button')].find(b => b.textContent === '接受').click()"); time.sleep(1.5)
     check("接受後少一則", "等你決定 1" in (js("document.querySelector('#quota').innerText") or ""))
+    key("Escape"); time.sleep(0.4)
+    # key 總開關
+    time.sleep(1)
+    check("左欄有 key 開關，只有尾三碼", js("(() => { const c = document.querySelector('[data-keycard]'); return c && c.innerText.includes('key1 …aaa') && c.innerText.includes('key2 …bbb'); })()"))
+    check("頁面原始碼與畫面都沒有完整 key", "sk-or-v1" not in (js("document.documentElement.outerHTML") or ""))
+    check("還沒切過時標出來", "還沒切過" in (js("document.querySelector('[data-keycard]').innerText") or ""))
+    js("document.querySelector('[data-keycard]').click()"); time.sleep(1.2)
+    check("清單列出每個地方與實際尾碼", all(t in (js("document.querySelector('.keyp').innerText") or "") for t in ("判官甲", "主站乙", "…aaa")))
+    shot("key清單切換前")
+    js("document.querySelector('.keyp [data-key=\"2\"]').click()"); time.sleep(0.5)
+    check("切之前先確認", "全部換成 key2 …bbb" in (js("document.querySelector('.dialog:last-of-type h3') && [...document.querySelectorAll('.dialog h3')].pop().innerText") or ""))
+    js("[...document.querySelectorAll('.dialog button')].find(b => b.textContent === '換').click()"); time.sleep(1.5)
+    check("真的換了檔案", open(raw).read().strip() == KB and f"P={KB}" in open(far).read() and f"Q={KA}" in open(far).read())
+    check("按鈕亮在 key2", js("document.querySelector('.keyp [data-key=\"2\"]').classList.contains('on')"))
+    check("每一處都打勾", js("document.querySelectorAll('.keyp .keybad').length === 0 && document.querySelectorAll('.keyp .keyok').length === 2"))
+    shot("key清單切換後")
+    open(raw, "w").write(KA)
+    js("[...document.querySelectorAll('.keyp button')].find(b => b.textContent === '重查').click()"); time.sleep(1.2)
+    check("有一處被改回舊 key 看得出來", js("document.querySelector('.keyp [data-target=\"raw\"] .keybad') !== null"))
+    js("document.querySelector('[data-keyscan]').click()"); time.sleep(2.5)
+    js("[...document.querySelectorAll('.keyp button')].find(b => b.textContent === '重查').click()"); time.sleep(1.2)
+    check("掃描列出名單外的地方", "new.env" in (js("document.querySelector('.keyp').innerText") or ""))
+    shot("key名單外")
     key("Escape"); time.sleep(0.4)
     fake.terminate()
     # 上面那排人再多，最後新開的也看得到、拖得動

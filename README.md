@@ -179,7 +179,9 @@ Remote identity comes from the key; an `as` claimed in the request does not coun
 | `ROOMS_DATA_DIR` | Data folder for the container, default `./data` |
 | `ROOMS_JUDGE` | `off` turns the judge off (messages without an @ wake the lead instead) |
 | `ROOMS_JUDGE_URL` / `ROOMS_JUDGE_MODEL` | Judge endpoint and model, default OpenRouter's `typesafe/jev-1.13` |
+| `ROOMS_JUDGE_KEY_FILE` | File holding the judge key, re-read on every call, so changing it needs no restart |
 | `ROOMS_JUDGE_KEY` | Judge API key; falls back to `OPENROUTER_API_KEY` |
+| `ROOMS_KEYS_DIR` | Folder for the key switch, default `~/.config/agent-rooms/openrouter` (`key1`, `key2`, `targets.json`, none of them in the repo); the switch appears in the left column once it is set up |
 | `ROOMS_JUDGE_TIMEOUT` | Judge timeout in seconds, default 8 |
 | `ACC_SESSIONS` | [acc](https://github.com/tenplus1000/acc)'s session folder, used to tell which conversation the user last spoke in |
 | `ROOMS_WINDOWS_HOME` | The Windows user folder as seen from WSL (found automatically by default) |
