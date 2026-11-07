@@ -839,17 +839,34 @@ class HeadlessClaudeWorker(Worker):
             # 自己一個 session：轉送程式重啟（systemd 只停主程式）時不會被一起砍掉
             proc = subprocess.Popen(args, cwd=member["cwd"], env=env, stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            # 馬上開始寫 stdin：claude 等 3 秒沒收到就放棄（Input must be provided），核心的呼叫都排在後面
+            piped = {}
+
+            def pump():
+                try:
+                    piped["out"] = proc.communicate(input=text)
+                except Exception as error:
+                    piped["error"] = error
+
+            pump_thread = threading.Thread(target=pump, daemon=True)
+            pump_thread.start()
             # 起得來才推進游標（起不來這一批留著，下一圈重送）；跑起來之後轉送程式重啟也不會重送；撞到額度上限才倒回
-            call("POST", "/api/ack", session=self.session, room_id=room_id, seq=events[-1]["seq"])
-            call("POST", "/api/touch", session=self.session)
-            self.last_sent = time.time()
-            self.sent.append(self.last_sent)
-            self.note("turn", f"背景跑 claude -p（{member['account']}）送了 {len(events)} 則（到 #{events[-1]['seq']}）")
+            try:
+                call("POST", "/api/ack", session=self.session, room_id=room_id, seq=events[-1]["seq"])
+                call("POST", "/api/touch", session=self.session)
+                self.last_sent = time.time()
+                self.sent.append(self.last_sent)
+                self.note("turn", f"背景跑 claude -p（{member['account']}）送了 {len(events)} 則（到 #{events[-1]['seq']}）")
+            except Exception as error:
+                log(self.session, "登記那一輪時出錯（那一輪照跑）", error)
             running = os.path.join(CLAUDE_MEMBERS, "running", self.session + ".pid")
             os.makedirs(os.path.dirname(running), exist_ok=True)
             with open(running, "w") as fh:
                 fh.write(str(proc.pid))
-            stdout, stderr = proc.communicate(input=text)
+            pump_thread.join()
+            if "error" in piped:
+                raise piped["error"]
+            stdout, stderr = piped["out"]
             done = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
             try:
                 os.remove(running)

@@ -1,7 +1,9 @@
 import json
+import time
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from rooms import dispatch
@@ -17,7 +19,9 @@ class ClaudeMemberTest(unittest.TestCase):
         self.record = tmp / "calls.jsonl"
         fake = tmp / "claude"
         fake.write_text(f"""#!/usr/bin/env python3
-import json, os, sys
+import json, os, select, sys
+if os.environ.get("FAKE_STDIN_WAIT") and not select.select([sys.stdin], [], [], float(os.environ["FAKE_STDIN_WAIT"]))[0]:
+    print("Error: Input must be provided"); sys.exit(1)       # 真的 claude：3 秒沒收到 stdin 就放棄
 with open({str(self.record)!r}, "a") as fh:
     fh.write(json.dumps({{"args": sys.argv[1:], "stdin": sys.stdin.read(), "cwd": os.getcwd(), "home": os.environ.get("CLAUDE_CONFIG_DIR"),
                          "dispatched": os.environ.get("ROOMS_DISPATCHED")}}) + "\\n")
@@ -46,6 +50,22 @@ sys.exit(1 if fail else 0)
 
     def calls(self):
         return [json.loads(l) for l in self.record.read_text().splitlines()]
+
+    def test_slow_core_does_not_starve_the_member_of_its_stdin(self):
+        """啟動後要呼叫核心幾次；機器忙的時候不能讓 claude 等不到訊息就放棄。"""
+        session, _ = dispatch.spawn_claude(str(self.work), "c2")
+        dispatch.render_claude = lambda room, session, events: "別餓著"
+        real = dispatch.call
+
+        def slow(*args, **kwargs):
+            if args[:2] == ("POST", "/api/ack"):
+                time.sleep(1.5)
+            return real(*args, **kwargs)
+
+        with mock.patch.object(dispatch, "call", slow), mock.patch.dict(os.environ, {"FAKE_STDIN_WAIT": "0.8"}):
+            dispatch.HeadlessClaudeWorker(session).turn("R1", [{"seq": 3}])
+        self.assertTrue(self.record.exists())
+        self.assertIn("別餓著", json.loads(self.record.read_text().splitlines()[-1])["stdin"])
 
     def test_first_turn_opens_then_resumes_with_account_model_effort(self):
         session, home = dispatch.spawn_claude(str(self.work), "c2", "sonnet", "high")
