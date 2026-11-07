@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from rooms.core import USER, USER_NAME, Core, RoomError
 
@@ -423,6 +424,47 @@ class CoreTest(unittest.TestCase):
         events = self.drain("s-cx1")
         self.assertEqual([(e["type"], e["action"]) for e in events if e["type"] == "task"], [("task", "claim")])
 
+    def saves(self):
+        return mock.patch.object(self.core, "_save", wraps=self.core._save)
+
+    def test_idle_listening_does_not_rewrite_the_state_file(self):
+        """轉送程式替每個成員掛一條長輪詢：沒有變動就不該整份存檔。"""
+        self.core.move("s-cx1", "s-cx1", self.room)
+        with self.saves() as save:
+            for _ in range(3):
+                self.core.listen("s-cx1", wait=0, triggers_only=True, consume=False, heartbeat=False)
+            self.assertEqual(save.call_count, 0)
+        self.core.post(USER, self.room, "@codex-1 來")
+        with self.saves() as save:                                  # 轉送程式看到還沒送：一樣不用存
+            got = self.core.listen("s-cx1", wait=0, triggers_only=True, consume=False, heartbeat=False)
+            self.assertTrue(got["events"])
+            self.assertEqual(save.call_count, 0)
+
+    def test_moving_the_cursor_is_still_saved(self):
+        self.core.move("s-cx1", "s-cx1", self.room)
+        self.core.post(USER, self.room, "@codex-1 來")
+        seq = self.core.listen("s-cx1", wait=0, consume=True, heartbeat=False)["events"][-1]["seq"]
+        again = Core(self._tmp.name)
+        self.assertEqual(again.state["agents"]["s-cx1"]["cursor"][self.room], seq)
+        self.assertEqual(again.listen("s-cx1", wait=0, heartbeat=False)["events"], [])
+
+    def test_ack_is_still_saved(self):
+        """轉送程式 consume=0 看完，靠 ack 推游標：這一步一定要落地。"""
+        self.core.move("s-cx1", "s-cx1", self.room)
+        self.core.post(USER, self.room, "@codex-1 來")
+        seq = self.core.listen("s-cx1", wait=0, consume=False, heartbeat=False)["events"][-1]["seq"]
+        self.core.ack("s-cx1", self.room, seq)
+        self.assertEqual(Core(self._tmp.name).state["agents"]["s-cx1"]["cursor"][self.room], seq)
+
+    def test_heartbeat_is_saved_at_most_every_half_minute(self):
+        self.core.listen("s-cx1", wait=0, heartbeat=True)
+        with self.saves() as save:
+            self.core.listen("s-cx2", wait=0, heartbeat=True)
+            self.assertEqual(save.call_count, 0)
+            self.core._heartbeat_saved = 0
+            self.core.listen("s-cx2", wait=0, heartbeat=True)
+            self.assertEqual(save.call_count, 1)
+        self.assertTrue(self.core.state["agents"]["s-cx2"]["listening_at"])     # 畫面上的在不在還是即時的
 
 if __name__ == "__main__":
     unittest.main()

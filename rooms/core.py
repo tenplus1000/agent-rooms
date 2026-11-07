@@ -67,6 +67,9 @@ TOOL_KINDS = {"dashboard": "儀表板", "database": "資料庫與檢視介面", 
 SELF_WAKES = 3          # SELF_WINDOW 秒內被自己叫醒幾次（中間沒有別人的訊息）之後就不再叫：防空轉
 SELF_WINDOW = 1800      # 只看最近 30 分鐘：每小時回來看一次的排程不會被擋
 
+HEARTBEAT_SAVE = 30
+
+
 class Core:
     def __init__(self, data_dir):
         self.data = Path(data_dir)
@@ -94,6 +97,14 @@ class Core:
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, path)
+
+    def _save_listen(self, changed, heartbeat):
+        """監聽大多沒有任何變動（轉送程式替每個成員掛一條，整份狀態一存就是幾 MB）：
+        游標動了才存；心跳只影響畫面上的在不在，重啟後會自己更新，最多每 30 秒存一次。"""
+        if changed or (heartbeat and time.time() - getattr(self, "_heartbeat_saved", 0) > HEARTBEAT_SAVE):
+            if heartbeat:
+                self._heartbeat_saved = time.time()
+            self._save()
 
     def _events_path(self, room_id):
         return self.data / "rooms" / f"{room_id}.jsonl"
@@ -1166,15 +1177,17 @@ class Core:
                     if consume:
                         self._advance(agent, rows[:limit] if len(rows) <= limit else rows)
                     rows = self._fit(session, rows, limit)
-                    self._save()
+                    self._save_listen(consume, heartbeat)
                     return {"room_id": room_id, "dnd": agent["dnd"], "off": agent.get("off"),
                             "headless": agent.get("headless"), "events": rows}
                 left = deadline - time.time()
                 if left <= 0:
                     # 只剩他自己的事件時推進游標，不然下次還會掃到它們
+                    moved = False
                     if consume and not triggers_only and room_id and not agent["dnd"] and self.events.get(room_id):
+                        moved = agent["cursor"].get(room_id) != self.events[room_id][-1]["seq"]
                         agent["cursor"][room_id] = self.events[room_id][-1]["seq"]
-                    self._save()
+                    self._save_listen(moved, heartbeat)
                     return {"room_id": room_id, "dnd": agent["dnd"], "off": agent.get("off"),
                             "headless": agent.get("headless"), "events": []}
                 self.cond.wait(left)
