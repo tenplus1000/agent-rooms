@@ -444,6 +444,17 @@ class HookTest(LiveServer):
         again = self.run_hook("s-claude", "UserPromptSubmit")
         self.assertNotIn("房間的新訊息", again)                          # 補過的不再補
 
+    def test_background_member_hears_who_calls_it_mid_turn(self):
+        """背景跑的成員一輪做到一半，主持叫停要插得進去；只是背景的訊息不打斷它。"""
+        with mock.patch.dict(os.environ, {"ROOMS_DISPATCHED": "1"}):
+            self.core.post(USER, self.room, "@工人 只是背景")
+            self.assertIsNone(self.run_hook("s-claude", "PostToolUse"))
+            self.core.post("s-cx", self.room, "@主持 先停下來")
+            self.assertIn("先停下來", self.run_hook("s-claude", "PostToolUse"))
+            self.assertIsNone(self.run_hook("s-claude", "PostToolUse"))        # 插過的不重送
+            self.core.post("s-cx", self.room, "@主持 第二句")
+            self.assertIsNone(self.run_hook("s-claude", "UserPromptSubmit"))   # 那一輪開頭的 prompt 已經帶了，不重複注入
+
     def test_message_survives_a_hook_that_dies_before_its_output_lands(self):
         self.core.post(USER, self.room, "別掉")
         with mock.patch.object(cli, "_ack_shown", side_effect=SystemExit):   # 輸出前後被砍掉：還沒 ack

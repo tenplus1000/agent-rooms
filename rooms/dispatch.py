@@ -875,7 +875,7 @@ class HeadlessClaudeWorker(Worker):
             self.fail("quota_wait", f"{member['account']} 的額度用完了，這一批留著，約 {at} 重置後自動補送", events)
             return
         if done.returncode or result.get("is_error"):
-            self.fail("failed_after", f"那一輪沒跑完（{str(result.get('result') or '')[:200]}）；"
+            self.fail("failed_after", f"那一輪沒跑完（{str(result.get('result') or '')[:200] or '程式被停掉或中斷，沒有留下原因'}）；"
                       f"訊息已送過不重送，可用 {claude_member_hint(self.session, member)} 接上看", events)
             return
         self.reported = None

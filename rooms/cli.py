@@ -262,7 +262,8 @@ def hook():
         payload = json.loads(sys.stdin.read() or "{}")
         session = payload.get("session_id", "")
         event_name = payload.get("hook_event_name", "UserPromptSubmit")
-        if not session or os.environ.get("ROOMS_DISPATCHED"):
+        # 轉送程式自己跑的那一輪：這一批已經帶在 prompt 裡；做事中途有人找他（例如主持叫停）照樣插話
+        if not session or (os.environ.get("ROOMS_DISPATCHED") and event_name != "PostToolUse"):
             return                # 轉送程式自己跑的那一輪（背景 Claude 成員）：訊息已經帶在 prompt 裡
         try:
             record_turn(payload, event_name, session)
