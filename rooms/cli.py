@@ -8,6 +8,7 @@
 """
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -179,6 +180,7 @@ RULES = """你現在在 {user} 的房間工具裡：房間「{room}」（{room_i
 - `tools` 看這間房接上的本機工具（網址、repo、怎麼啟動、`tools --map <代號>` 印程式圖）；{user} 說「房間接的那個」就是指這些。
 - 收到成員或別的對話的回報（交件、做完、卡住），回 {user} 的第一句就講誰回報了什麼，不要混在別的狀態裡。
 - 轉達給不在房裡的對話（例如用 SendMessage）時，附上 {user} 原話的時間和你的 session id，對方才查得到那是 {user} 交代的。
+- {user} 的行程各房共用，近期的會列在這裡。`{room_cmd} cal` 看全部；{user} 交代才用 `{room_cmd} cal add 2026-11-08 標題 --time 14:00`、`{room_cmd} cal rm C1`。
 - 核對別人轉述的 {user} 原話：{user} 在房間頁面講的，`read` 那間房就看得到（標「來自 {user}」）；在某個對話講的，用 history-search 查，幾十秒內就同步，不用先 refresh。查不到先換關鍵字，再問 {user}。
 - 等成員回報時，不要用 sleep、until 這類會卡住的指令等，也不用開 Monitor：指令跑著的時候房間訊息進不來；有人交件、回報或找你，房間會在你這一輪結束後叫醒你。
 {maintainer_line}- 只處理這間房的事；別的房間你看不到，也不要去找。"""
@@ -303,6 +305,8 @@ def hook():
         parts = []
         if full:
             parts.append((CODEX_RULES if me["kind"] == "codex" else RULES).format(**info, user=USER_NAME, user_id=USER, owner_label=OWNER_LABEL))
+        if full and calendar_text(overview):
+            parts.append(calendar_text(overview))
         if lines:
             parts.append("房間的新訊息：\n" + "\n".join(lines))
         if not parts or (not full and not lines):
@@ -384,11 +388,24 @@ def global_hook(session, event_name, full, overview):
         parts.append(rules.format(user=USER_NAME, user_id=USER, owner_label=OWNER_LABEL, name=me["name"], call=call_of(session, g, overview), session=session,
                                   room_cmd=os.path.join(repo, "bin", "room"), repo=repo, maintainer=keeper))
         parts.append(summary_of(overview))
+        if calendar_text(overview):
+            parts.append(calendar_text(overview))
     if lines:
         parts.append("找你的訊息：\n" + "\n".join(lines))
     print(json.dumps({"hookSpecificOutput": {"hookEventName": event_name,
                                              "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False), flush=True)
     _ack_shown(session, got)
+
+
+def calendar_text(overview):
+    """開口那一輪帶上近期行程：今天起 14 天內，最多 12 筆。"""
+    today = datetime.date.today()
+    end = (today + datetime.timedelta(days=14)).isoformat()
+    soon = [e for e in (overview or {}).get("calendar", []) if today.isoformat() <= e["date"] <= end][:12]
+    if not soon:
+        return ""
+    rows = [f"- {e['date']}{' ' + e['time'] if e['time'] else ''} {e['title']}{'（' + e['note'] + '）' if e['note'] else ''} [{e['id']}]" for e in soon]
+    return f"{USER_NAME} 的行程（今天 {today.isoformat()}；看全部、新增、刪除用 `room cal`）：\n" + "\n".join(rows)
 
 
 def summary_of(overview):
@@ -610,6 +627,9 @@ def main(argv=None):
     s = sub.add_parser("delete", help="刪房間（使用者或全域角色；房裡要先沒人，紀錄會封存）"); s.add_argument("room_id")
     sub.add_parser("resume", help="解除暫停（使用者、維修或負責人）")
     s = sub.add_parser("hops", help="互相 @ 幾次就暫停（使用者、維修或負責人）；off＝不限"); s.add_argument("room_id"); s.add_argument("limit")
+    s = sub.add_parser("cal", help="共用行程：不帶參數列出；add 日期 標題 [--time 14:00] [--note 備註]；rm 編號")
+    s.add_argument("action", nargs="?", choices=("add", "rm")); s.add_argument("args", nargs="*")
+    s.add_argument("--time", default=""); s.add_argument("--note", default="")
     s = sub.add_parser("title", help="改房名（負責人或使用者）"); s.add_argument("room_id"); s.add_argument("name")
     s = sub.add_parser("join"); s.add_argument("room_id"); s.add_argument("--kind", default=""); s.add_argument("--name", default="")
     sub.add_parser("leave")
@@ -703,6 +723,18 @@ def main(argv=None):
         return show({"identity": got["identity"], "name": got["name"], "written": path})
     if a.cmd == "delete":
         return show(call("POST", f"/api/rooms/{a.room_id}/delete", actor))
+    if a.cmd == "cal":
+        if a.action == "add":
+            if len(a.args) < 2:
+                raise SystemExit("用法：room cal add 2026-11-08 標題 [--time 14:00] [--note 備註]")
+            return show(call("POST", "/api/calendar", actor, date=a.args[0], title=" ".join(a.args[1:]), time=a.time, note=a.note))
+        if a.action == "rm":
+            if len(a.args) != 1:
+                raise SystemExit("用法：room cal rm C1")
+            return show(call("POST", "/api/calendar/remove", actor, id=a.args[0]))
+        for e in call("GET", "/api/calendar", actor):
+            print(f"{e['id']} {e['date']} {e['time'] or '　　　'} {e['title']}{'（' + e['note'] + '）' if e['note'] else ''}（{e['by']} 登記）")
+        return
     if a.cmd == "hops":
         limit = 0 if a.limit.lower() in ("off", "none", "0") else int(a.limit)
         return show(call("POST", f"/api/rooms/{a.room_id}/hops", actor, limit=limit))

@@ -125,6 +125,12 @@ def make_handler(core, remote=False):
                 return core.issue_key(actor, a["identity"], a.get("label", ""))
             if method == "POST" and path == "/api/global":
                 return core.set_global(actor, a["session"], a.get("kind", ""), a.get("alias", ""))
+            if method == "GET" and path == "/api/calendar":
+                return core.calendar()
+            if method == "POST" and path == "/api/calendar":
+                return core.calendar_add(actor, a.get("date"), a.get("title"), a.get("time", ""), a.get("note", ""))
+            if method == "POST" and path == "/api/calendar/remove":
+                return core.calendar_remove(actor, a.get("id"))
             if method == "POST" and path == "/api/user_here":
                 return core.user_here(a["session"])
             if method == "POST" and path == "/api/dnd":

@@ -53,6 +53,10 @@ TOOLS = [
     tool('room_threads', '列出線頭。', {'room_id': ROOM, 'all': field('boolean', 'true 包含已關閉線頭，預設 false。')}),
     tool('room_thread_close', '關閉指定線頭。', {'thread_id': field('string', '線頭 thread_id，例如 L1。'), 'note': NOTE}, ('thread_id',)),
     tool('room_moves', '查詢自己的移動紀錄。'),
+    tool('room_calendar', '列出使用者的共用行程（各房同一份）。'),
+    tool('room_calendar_add', '新增共用行程。照使用者的話才新增。', {'date': field('string', '日期，例如 2026-11-08。'), 'title': TEXT,
+         'time': field('string', '時間，可不填，例如 14:00 或 14:00-16:00。'), 'note': field('string', '備註，可不填。')}, ('date', 'title')),
+    tool('room_calendar_remove', '刪除共用行程。照使用者的話才刪除。', {'id': field('string', '行程編號，例如 C1。')}, ('id',)),
     tool('room_dnd', '設定自己的勿擾狀態。', {'on': field('boolean', 'true 開啟；false 關閉。')}, ('on',)),
     tool('task_new', '建立任務。', {'room_id': ROOM, 'objective': TEXT, 'criteria': TEXT, 'verifier': field('string', '檢查者 session；省略時由核心選用房間負責人。')}, ('objective', 'criteria')),
     tool('task_list', '列出房間任務。', {'room_id': ROOM}),
@@ -158,6 +162,12 @@ def invoke(name, arguments):
         return codemap.write(tool['id'], tool['repo'])[1]
     if name == 'room_hosts':
         return http('GET', '/api/hosts', **actor)
+    if name == 'room_calendar':
+        return http('GET', '/api/calendar', **actor)
+    if name == 'room_calendar_add':
+        return http('POST', '/api/calendar', **params, **actor)
+    if name == 'room_calendar_remove':
+        return http('POST', '/api/calendar/remove', **params, **actor)
     if name in ('room_moves', 'room_dnd'):
         method, path = ('GET', '/api/moves') if name == 'room_moves' else ('POST', '/api/dnd')
         return http(method, path, session=session, **params, **actor)

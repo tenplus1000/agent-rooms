@@ -1433,6 +1433,43 @@ class Core:
 
     # ──使用者的總覽 ─────────────────────────────────────
 
+    def calendar(self):
+        """使用者希望大家知道的行程：各房共用一份，照日期時間排。"""
+        with self.cond:
+            return sorted((dict(e) for e in self.state.get("calendar", [])), key=lambda e: (e["date"], e["time"] or "", e["id"]))
+
+    def calendar_add(self, actor, date, title, time_="", note=""):
+        title, time_, note = str(title or "").strip(), str(time_ or "").strip(), str(note or "").strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(date or "")):
+            raise RoomError("日期要寫成 2026-11-08", 400)
+        try:
+            datetime.date.fromisoformat(date)
+        except ValueError:
+            raise RoomError(f"沒有這一天：{date}", 400)
+        if time_ and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d(-([01]\d|2[0-3]):[0-5]\d)?", time_):
+            raise RoomError("時間要寫成 14:00 或 14:00-16:00", 400)
+        if not title:
+            raise RoomError("行程要有標題", 400)
+        with self.cond:
+            self.state["calendar_seq"] = self.state.get("calendar_seq", 0) + 1
+            event = {"id": f"C{self.state['calendar_seq']}", "date": date, "time": time_, "title": title[:200], "note": note[:1000],
+                     "by": self.name_of(actor) if actor else USER_NAME, "at": _now()}
+            self.state.setdefault("calendar", []).append(event)
+            self._save()
+            self.cond.notify_all()
+            return event
+
+    def calendar_remove(self, actor, event_id):
+        with self.cond:
+            events = self.state.get("calendar", [])
+            hit = next((e for e in events if e["id"] == event_id), None)
+            if not hit:
+                raise RoomError(f"沒有這個行程：{event_id}", 404)
+            events.remove(hit)
+            self._save()
+            self.cond.notify_all()
+            return hit
+
     def overview(self):
         with self.cond:
             agents = []
@@ -1453,6 +1490,6 @@ class Core:
                 view["neighbors"] = self.neighbors(rid)
                 rooms.append(view)
             return {"rooms": rooms, "agents": agents, "globals": dict(self._globals()),
-                    "tools": [dict(t) for t in self.state.get("tools", {}).values()], "tool_kinds": TOOL_KINDS,
+                    "calendar": self.calendar(), "tools": [dict(t) for t in self.state.get("tools", {}).values()], "tool_kinds": TOOL_KINDS,
                     "user": {"id": USER, "name": USER_NAME}, "labels": {"owner": OWNER_LABEL}}
 

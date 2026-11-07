@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[2]
 EXPECTED = {
     'room_join', 'room_leave', 'room_who', 'room_read', 'room_say',
     'room_whiteboard_get', 'room_whiteboard_set', 'room_neighbor_boards', 'room_hosts', 'room_tools', 'room_tool_map', 'room_threads', 'room_thread_close',
-    'room_moves', 'room_dnd', 'task_new', 'task_list', 'task_claim', 'task_submit',
+    'room_moves', 'room_calendar', 'room_calendar_add', 'room_calendar_remove', 'room_dnd', 'task_new', 'task_list', 'task_claim', 'task_submit',
     'task_close', 'task_park', 'task_revise', 'task_drop', 'task_amend',
 }
 
@@ -112,7 +112,7 @@ def main():
             assert core.poll() is None, (base / 'core.log').read_text()
             try:
                 with urllib.request.urlopen(base_url + '/api/overview', timeout=1) as response:
-                    assert json.load(response)['result'] == {'rooms': [], 'agents': [], 'globals': {}, 'tools': [], 'tool_kinds': {'dashboard': '儀表板', 'database': '資料庫與檢視介面', 'assistant': '助手工具'}, 'user': {'id': 'user', 'name': 'user'}, 'labels': {'owner': '負責人'}}
+                    assert json.load(response)['result'] == {'rooms': [], 'agents': [], 'globals': {}, 'calendar': [], 'tools': [], 'tool_kinds': {'dashboard': '儀表板', 'database': '資料庫與檢視介面', 'assistant': '助手工具'}, 'user': {'id': 'user', 'name': 'user'}, 'labels': {'owner': '負責人'}}
                 break
             except (urllib.error.URLError, TimeoutError):
                 if time.monotonic() >= deadline:
@@ -130,7 +130,7 @@ def main():
         assert init['capabilities'] == {'tools': {'listChanged': False}}
         client.write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         listed = client.rpc('tools/list')['tools']
-        assert len(listed) == 24 and {tool['name'] for tool in listed} == EXPECTED
+        assert len(listed) == 27 and {tool['name'] for tool in listed} == EXPECTED
         for tool in listed:
             assert 'session' in tool['inputSchema']['required']
             assert 'as' not in tool['inputSchema']['properties']
@@ -184,6 +184,10 @@ def main():
         assert not client.tool('room_threads', **{'all': False})
         assert len(client.tool('room_threads', **{'all': True})) >= 2
         assert client.tool('room_moves', 'mcp-b')[-1]['to'] == room_id
+        event = client.tool('room_calendar_add', 'mcp-b', date='2030-01-02', title='課', time='14:00')
+        assert client.tool('room_calendar', 'mcp-b')[0]['title'] == '課'
+        client.tool('room_calendar_remove', 'mcp-b', id=event['id'])
+        assert client.tool('room_calendar', 'mcp-b') == []
         assert client.tool('room_dnd', 'mcp-b', on=True)['dnd'] is True
         assert client.tool('room_say', 'mcp-b', text='勿擾中照指令發送')['from'] == 'mcp-b'
         assert client.tool('room_dnd', 'mcp-b', on=False)['dnd'] is False

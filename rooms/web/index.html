@@ -95,6 +95,8 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 .qcard .nm small { color: var(--dim); font-weight: 400; }
 .qcard .row { display: flex; align-items: center; gap: 5px; margin-top: 2px; color: var(--dim); }
 .qcard .row span:first-child { width: 22px; }
+.calform { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.calform input { width: 100%; box-sizing: border-box; }
 .keybtns { display: flex; gap: 4px; }
 .keybtn { flex: 1; padding: 2px 4px; font-size: 11px; white-space: nowrap; }
 .qcard .keybtns { flex-direction: column; }
@@ -1257,6 +1259,59 @@ function resetText(iso) {                // 今天的只寫幾點；其他寫月
   const today = new Date().toDateString() === t.toDateString();
   return `${today ? hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`} 重置`;
 }
+// ── 共用行程：各房同一份，成員開口時會看到近期的 ──────────
+function localDay(offset = 0) {
+  const d = new Date(Date.now() + offset * 86400000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function calUpcoming() { return ((S.ov && S.ov.calendar) || []).filter(e => e.date >= localDay()); }
+function calCard() {
+  const up = calUpcoming(), next = up[0];
+  const card = el("div", { class: "qcard", "data-calcard": "1", style: "cursor:pointer", title: "看行程、新增、刪除" },
+    el("div", { style: "font-weight:600", text: `行程 ${up.length} ▸` }),
+    next ? el("div", { class: "rst", style: "text-align:left;white-space:normal", text: `${next.date.slice(5)} ${next.time || ""} ${next.title}` }) : null);
+  card.addEventListener("click", () => calPanel());
+  return card;
+}
+function calPanel() {
+  const list = el("div", { class: "scroll", style: "max-height:46vh" });
+  const date = el("input", { type: "date", "data-caldate": "1" }); date.value = localDay();
+  const time = el("input", { placeholder: "時間（可不填，14:00 或 14:00-16:00）", "data-caltime": "1" });
+  const title = el("input", { placeholder: "行程", "data-caltitle": "1" });
+  const note = el("input", { placeholder: "備註（可不填）" });
+  const box = el("div", { class: "dialog wide accp" }, el("h3", { text: "行程（各房共用）" }), list,
+    el("h4", { text: "新增" }), el("div", { class: "calform" }, date, time, title, note),
+    el("div", { class: "row", style: "margin-top:10px" },
+      el("button", { text: "新增", "data-caladd": "1", on: { click: add } }),
+      el("button", { text: "關閉", on: { click: () => closeTop() } })));
+  const layer = el("div", { class: "layer" }, box);
+  layer.addEventListener("pointerdown", e => { if (e.target === layer) closeTop(); });
+  function fill() {
+    const all = (S.ov && S.ov.calendar) || [], today = localDay();
+    const up = all.filter(e => e.date >= today), past = all.filter(e => e.date < today).reverse();
+    const row = e => el("div", { class: "tidy-row", "data-event": e.id },
+      el("span", { class: "who", style: "cursor:default" }, el("b", { text: `${e.date}${e.time ? " " + e.time : ""}　${e.title}` }),
+        el("small", { text: `${e.note ? e.note + "・" : ""}${e.by} 登記・${e.id}` })),
+      el("button", { text: "刪除", on: { click: () => remove(e) } }));
+    list.replaceChildren(...(up.length ? up.map(row) : [el("div", { class: "box", text: "接下來沒有行程。" })]));
+    if (past.length) list.append(el("h4", { text: `已過去（${past.length}）` }), ...past.map(row));
+  }
+  async function reload() { S.ov = await api("GET", "/api/overview", {}); fill(); drawQuota(); }
+  async function add() {
+    try { await api("POST", "/api/calendar", { date: date.value, time: time.value.trim(), title: title.value, note: note.value }); }
+    catch (e) { return toast("沒成功：" + e.message); }
+    title.value = time.value = note.value = ""; await reload(); title.focus();
+  }
+  async function remove(e) {
+    if (!await dialog({ title: "刪除這個行程？", text: `${e.date} ${e.time || ""} ${e.title}`, ok: "刪除", danger: true })) return;
+    try { await api("POST", "/api/calendar/remove", { id: e.id }); } catch (err) { return toast("沒成功：" + err.message); }
+    await reload();
+  }
+  fill();
+  document.body.append(layer);
+  pushLayer(() => layer.remove());
+}
+
 // ── OpenRouter key 總開關：切一次，所有專案一起換（頁面只看得到尾三碼）──────────
 async function refreshKeys(check) {
   if (!S.local) return;
@@ -1343,13 +1398,14 @@ async function keyPanel(noCheck) {
 function drawQuota() {
   const box = $("quota"); box.replaceChildren();
   const n = (S.loose || []).length;
-  if (!S.accounts && !n && !(S.keys && S.keys.configured)) { box.style.display = "none"; return; }
+  if (!S.ov) { box.style.display = "none"; return; }
   box.style.display = "flex";
   if (n) {                                          // 掛不到任何點上的建議：收起額度欄也照樣看得到
     const card = el("div", { class: "qcard hot", style: "padding:4px 8px;cursor:pointer", title: "不屬於畫面上任何對話的建議", text: `等你決定 ${n} ▸` });
     card.addEventListener("click", () => loosePanel());
     box.append(card);
   }
+  box.append(calCard());
   if (S.keys && S.keys.configured) box.append(keyCard());
   if (!S.accounts) return;
   if (store.get("quotaHidden", false)) {           // 收起來：只留一個小標籤，點了再打開
@@ -1786,7 +1842,9 @@ function closeTop() { const l = S.layers.pop(); if (l) l.close(); }
 async function refresh() {
   try {
     const firstLoad = !S.ov;
+    const calBefore = JSON.stringify((S.ov && S.ov.calendar) || null);
     S.ov = await api("GET", "/api/overview");
+    if (JSON.stringify(S.ov.calendar) !== calBefore) drawQuota();    // 別人新增、刪除行程，左欄跟著變
     let first = false;
     for (const r of S.ov.rooms) {
       const last = lastEvent(r);
