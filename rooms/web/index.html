@@ -1275,7 +1275,7 @@ function calCard() {
 }
 function calPanel() {
   const list = el("div", { class: "scroll", style: "max-height:46vh" });
-  const date = el("input", { type: "date", "data-caldate": "1" }); date.value = localDay();
+  const date = el("input", { placeholder: "日期 2026-11-08", "data-caldate": "1" }); date.value = localDay();
   const time = el("input", { placeholder: "時間（可不填，14:00 或 14:00-16:00）", "data-caltime": "1" });
   const title = el("input", { placeholder: "行程", "data-caltitle": "1" });
   const note = el("input", { placeholder: "備註（可不填）" });

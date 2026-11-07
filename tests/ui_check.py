@@ -452,15 +452,15 @@ try:
     # 本機小幫手（acc、判斷層的建議）：假的小幫手，a1 有兩則等決定
     loose_file = os.path.join(data, "loose.json")
     # key 總開關：真的 keyswitch，暫存資料夾、假 key
-    keys_dir = tempfile.mkdtemp()
+    keys_dir = tempfile.mkdtemp(); scan_tree = tempfile.mkdtemp()
     KA, KB = "sk-or-v1-" + "a" * 61 + "aaa", "sk-or-v1-" + "b" * 61 + "bbb"
     open(keys_dir + "/key1", "w").write(KA); open(keys_dir + "/key2", "w").write(KB)
     far = keys_dir + "/app.env"; open(far, "w").write(f"A=1\nP={KA}\nQ={KB}\n")
     raw = keys_dir + "/raw.key"; open(raw, "w").write(KA)
-    open(keys_dir + "/targets.json", "w").write(json.dumps({"hosts": {"": {"via": [], "scan": [keys_dir + "/tree"]}}, "targets": [
+    open(keys_dir + "/targets.json", "w").write(json.dumps({"hosts": {"": {"via": [], "scan": [scan_tree]}}, "targets": [
         {"id": "raw", "project": "判官甲", "path": raw, "mode": "raw", "note": "每一發重讀"},
         {"id": "env", "project": "主站乙", "host": "", "path": far, "var": "P", "backup_var": "Q"}]}))
-    os.makedirs(keys_dir + "/tree"); open(keys_dir + "/tree/new.env", "w").write(f"X={KB}\n")
+    open(scan_tree + "/new.env", "w").write(f"X={KB}\n")
     fake = subprocess.Popen([sys.executable, "-c", FAKE_LOCAL], env=dict(env, ROOMS_LOCAL_ORIGINS=BASE, LOOSE_FILE=loose_file, ROOMS_KEYS_DIR=keys_dir),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
