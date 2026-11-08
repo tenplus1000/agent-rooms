@@ -196,6 +196,7 @@ def make_handler(core, remote=False):
                     return core.neighbor_boards(actor, room_id)
                 if sub == "post" and method == "POST":
                     text = a.get("text", "")
+                    core.screen_rights(actor, room_id, text)
                     judged = core.judge_wake(actor, room_id, text) if text.strip() else None
                     return core.post(actor, room_id, text, judged=judged, files=a.get("files"))
                 if sub == "upload" and method == "POST":

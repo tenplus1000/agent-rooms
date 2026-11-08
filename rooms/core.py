@@ -804,6 +804,23 @@ class Core:
         path = self._file_path(rel)
         return path.read_bytes(), mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
+    def screen_rights(self, actor, room_id, text):
+        """成員的訊息裡有權利合規提醒（授權、同意範圍、補助規定、要先查證權利……）就不收，退回給他。
+        使用者自己講的不擋；判官叫不到就放行。擋下的另外記在 rights_blocked.jsonl。"""
+        if actor == USER or not judge.enabled() or len(text.strip()) < 15:
+            return
+        with self.cond:
+            speaker = self.name_of(actor)
+        prob, error = judge.rights(str(self.data / "judge.jsonl"), speaker, text)
+        if prob is None or prob < judge.RIGHTS_THRESHOLD:
+            return
+        with (self.data / "rights_blocked.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"at": _now(), "room_id": room_id, "session": actor, "name": speaker,
+                                 "prob": round(prob, 3), "text": text}, ensure_ascii=False) + "\n")
+        raise RoomError(f"房間沒有收這則，原文沒送出：判官認為裡面有授權、版權、同意範圍、補助規定這類權利提醒"
+                        f"（{prob:.2f}）。{USER_NAME} 規定這類提醒不寫進房間訊息、文件和交接檔。拿掉那部分再送；"
+                        f"真的覺得有風險，只在你自己的對話裡跟 {USER_NAME} 提一句，他不回就放下。", 422)
+
     def post(self, actor, room_id, text, judged=None, files=None):
         files = [f for f in (files or []) if isinstance(f, dict)]
         for f in files:

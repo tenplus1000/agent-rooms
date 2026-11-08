@@ -103,6 +103,45 @@ def addressees(log_path, room_name, roles, speaker, text, targets, mentioned=(),
     return probs, error
 
 
+# 權利合規提醒：使用者不要成員把授權、版權、取樣條款、同意範圍、補助規定這類疑慮寫進房間。
+# 38 則配對（各只差一個特徵：照實寫出處／加一句要確認授權、轉述使用者的決定／自己加警告、
+# 查史料要附網址／地圖要查授權、工具核准與登入／作品使用權限……）全部翻對：該擋最低 0.73、該放最高 0.43。
+# 最近 500 則真實房間訊息掃過，擋下的 6 則都是這類提醒，沒有誤擋。。
+RIGHTS = "這則訊息是不是在提出法律上的權利或補助規定方面的疑慮、警告或保留：例如著作權、作品的使用授權、取樣素材（Splice 等）條款、同意書或同意範圍、肖像或個資、補助規定（重複補助、要列明其他經費、揭露義務），或要求先查證這類權利、先確認能不能用、先簽同意？（電腦權限、登入、OAuth、API key、工具要不要核准、檔案讀寫權限，這些不算）"
+RIGHTS_THRESHOLD = 0.6
+
+
+def rights(log_path, speaker, text):
+    """回 (機率, None)；叫不到回 (None, 錯誤)。每一發都記進 judge.jsonl。"""
+    state = f"剛剛「{speaker}」在工作房間裡發了這則訊息，要給其他 AI 成員或使用者看：\n「{text}」"
+    questions = {"warn": {"type": "noul", "instructions": RIGHTS}}
+    model = os.environ.get("ROOMS_JUDGE_MODEL", "").strip() or MODEL
+    row = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "kind": "rights",
+           "requested_model": model, "state": state, "questions": questions}
+    started = time.time()
+    prob, error = None, None
+    try:
+        headers = {"Content-Type": "application/json"}
+        if _key() and "openrouter.ai" in _url():
+            headers["Authorization"] = f"Bearer {_key()}"
+        body = json.dumps({"model": model, "state": state, "questions": questions}).encode("utf-8")
+        req = urllib.request.Request(_url(), data=body, method="POST", headers=headers)
+        with urllib.request.urlopen(req, timeout=float(os.environ.get("ROOMS_JUDGE_TIMEOUT", "8"))) as resp:
+            got = json.loads(resp.read().decode("utf-8"))
+        prob = float(got["answers"]["warn"]["noul"])
+        row.update(model=got.get("model"), answers=got["answers"], cost=(got.get("usage") or {}).get("cost"))
+    except Exception as exc:          # 叫不到就放行：不能因為判官掛了卡住大家的工作
+        error = f"{type(exc).__name__}: {exc}"
+        row["error"] = error
+    row["elapsed"] = round(time.time() - started, 2)
+    try:
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    return prob, error
+
+
 # 下線的對話該不該收起來：兩題配對驗過（交件／額度用完、報告寫好／做到一半、目標達成／進行中、
 # 測試完／常駐、做完沒後續／問要不要接著做），都在那一處翻面。做完 ≥ 門檻且還有沒做完的 < 門檻才建議收。
 DONE = "這個對話手上的工作已經做完、交出去，或明確不用再做了嗎？"
