@@ -1,0 +1,10 @@
+#!/bin/sh
+# 檔案快取超過門檻就交還：WSL 不會自己把快取還給 Windows，筆電會被擠到只剩幾 GB。
+# 只清 page cache（drop_caches=1），不碰程式記憶體；先 sync，還沒寫進硬碟的資料不會丟。
+LIMIT_MB=${LIMIT_MB:-3072}
+cache=$(awk '/^(Buffers|Cached|SReclaimable):/ {s+=$2} END {print int(s/1024)}' /proc/meminfo)
+[ "$cache" -le "$LIMIT_MB" ] && exit 0
+sync
+echo 1 > /proc/sys/vm/drop_caches
+after=$(awk '/^(Buffers|Cached|SReclaimable):/ {s+=$2} END {print int(s/1024)}' /proc/meminfo)
+logger -t drop-cache "file cache ${cache}MB over ${LIMIT_MB}MB, ${after}MB after dropping"

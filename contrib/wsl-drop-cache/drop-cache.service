@@ -1,0 +1,7 @@
+[Unit]
+Description=Give file cache back to Windows when it grows past the limit
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/local/sbin/drop-cache-if-big
