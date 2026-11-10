@@ -653,6 +653,18 @@ def calls_for(session, events, now=None):
     return fresh
 
 
+def same_batch(events, opened):
+    """這批訊息是不是上次開視窗時就在了。編號是各房間自己數的，不能跨房比，所以用時間：
+    全部都比上次開視窗早，才算同一批。"""
+    if not opened:
+        return False
+    try:
+        newest = max(datetime.datetime.fromisoformat(e["at"]).timestamp() for e in events)
+    except (KeyError, ValueError):
+        return False
+    return newest <= opened
+
+
 def reopened(session, seq=None):
     """開過視窗的那一批到第幾則（存檔：轉送程式重啟也不會同一批再開一次）。"""
     path = os.path.expanduser(f"~/.local/state/agent-rooms/reopen-{session}.seq")
@@ -699,7 +711,7 @@ class ClaudeWorker(Worker):
                 if time.time() - opened < REOPEN_GAP:
                     time.sleep(15)
                     continue
-                if opened_seq and events[-1]["seq"] <= opened_seq:
+                if same_batch(events, opened):
                     # 同一批已經開過一次視窗，沒接起來（被關掉、或沒按確認）：不再一直開，等有新的事再說。
                     # 例外：@自己（背景排程跑完叫醒自己）每 5 分鐘再試，總共試 3 次
                     selfish = any(e.get("self_call") and e.get("from") == self.session for e in events)

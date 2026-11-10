@@ -69,6 +69,15 @@ class ReopenTest(unittest.TestCase):
                   {"seq": 2, "type": "post", "at": at, "wake": ["s-1"], "from": "s-2"}]
         self.assertEqual([e["seq"] for e in dispatch.calls_for("s-1", events, now)], [1])
 
+    def test_same_batch_goes_by_time_not_room_seq(self):
+        # 編號是各房間自己數的：上次在別間房第 685 則開過，這間房第 60 則的新訊息還是要開
+        import datetime
+        opened = datetime.datetime(2026, 10, 29, tzinfo=datetime.timezone.utc).timestamp()
+        at = lambda later: datetime.datetime.fromtimestamp(opened + later, datetime.timezone.utc).isoformat()
+        self.assertFalse(dispatch.same_batch([{"seq": 60, "at": at(86400)}], opened))
+        self.assertTrue(dispatch.same_batch([{"seq": 700, "at": at(-30)}], opened))   # 開視窗前就在的那批
+        self.assertFalse(dispatch.same_batch([{"seq": 1, "at": at(-30)}], 0))          # 從沒開過
+
     def test_context_used_reads_codex_and_claude_records(self):
         import tempfile
         d = Path(tempfile.mkdtemp())
