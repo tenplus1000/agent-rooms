@@ -683,11 +683,34 @@ def reopened(session, seq=None):
 class ClaudeWorker(Worker):
     """替房裡的 Claude 盯著：平常什麼都不做（hook 會處理）；視窗關了又有人找它才開視窗接回。"""
 
+    def quota_wake(self, now=None):
+        """它停在額度用完、重置時間過了、沒有人再找它：房間代它 @ 自己一次，用原本的叫醒方式接回去。
+        視窗開著由 hook 送進去，視窗關了照 @自己 的規則開視窗。同一次撞到只叫一次。"""
+        now = now or time.time()
+        stuck = quota_stuck(self.session)
+        if not stuck or now < stuck[1] or quota_woken(self.session) >= stuck[0]:
+            return False
+        hit, reset = stuck
+        me = next((a for a in call("GET", "/api/overview")["agents"] if a["session"] == self.session), None)
+        if not me or not me.get("room_id") or me.get("off"):
+            return False                            # 不在房裡、或使用者標了下線：不吵它
+        quota_woken(self.session, hit)
+        hm = lambda t: time.strftime("%H:%M", time.localtime(t))
+        text = (f"@{me['name']} （房間代發）額度已經重置（{hm(reset - 60)}）。你在 {hm(hit)} 撞到額度上限停下來，"
+                f"那之後房間送來的訊息可能沒處理到：先 room read 看 {hm(hit)} 之後的紀錄，再接著做停下來前手上的工作。")
+        call("POST", f"/api/rooms/{me['room_id']}/post", text=text, **{"as": self.session})
+        self.note("quota_wake", f"額度在 {hm(reset - 60)} 重置，叫醒它接著做（{hm(hit)} 撞到上限）")
+        return True
+
     def run(self):
         self.self_tries = {}
         opened_seq, opened = reopened(self.session)
+        quota_checked = 0.0
         while not self.stop:
             try:
+                if time.time() - quota_checked > 60:
+                    quota_checked = time.time()
+                    self.quota_wake()
                 got = call("GET", "/api/listen", session=self.session, wait=30, triggers_only=1,
                            consume=0, heartbeat=0)
                 if not got["events"] or self.stop:
@@ -763,24 +786,91 @@ def quota_until(account, until=None):
     return known.get(account, 0)
 
 
-def quota_reset(text, now=None):
-    """「You've hit your session limit · resets 4:50am (Europe/Berlin)」→ 重置時間（epoch）；讀不懂就 15 分鐘後再試。"""
-    import re
+def quota_reset_at(text, now=None):
+    """「You've hit your session limit · resets 4:50am (Europe/Berlin)」→ 重置時間（epoch），讀不懂回 None。
+    一週額度的寫法會帶日期：「resets Oct 20, 7pm (Europe/Berlin)」。"""
     from zoneinfo import ZoneInfo
     now = now or time.time()
-    m = re.search(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)?\s*(?:\(([^)]+)\))?", text or "", re.I)
+    m = re.search(r"resets\s+(?:([A-Z][a-z]{2})\s+(\d{1,2}),\s*)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)?\s*(?:\(([^)]+)\))?",
+                  text or "", re.I)
     if not m:
-        return now + 900
+        return None
+    month, day, hh, mm, ampm, tz = m.groups()
     try:
-        zone = ZoneInfo(m.group(4)) if m.group(4) else None
+        zone = ZoneInfo(tz) if tz else datetime.timezone.utc
     except Exception:
-        zone = None
-    hour = int(m.group(1)) % 12 + (12 if (m.group(3) or "").lower() == "pm" else 0) if m.group(3) else int(m.group(1))
-    here = datetime.datetime.fromtimestamp(now, zone or datetime.timezone.utc)
-    at = here.replace(hour=hour, minute=int(m.group(2) or 0), second=0, microsecond=0)
-    if at.timestamp() <= now:
+        zone = datetime.timezone.utc
+    hour = int(hh) % 12 + (12 if ampm.lower() == "pm" else 0) if ampm else int(hh)
+    here = datetime.datetime.fromtimestamp(now, zone)
+    at = here.replace(hour=hour, minute=int(mm or 0), second=0, microsecond=0)
+    if month:
+        try:
+            mon = datetime.datetime.strptime(month[:3].title(), "%b").month
+            at = at.replace(month=mon, day=int(day))
+        except ValueError:
+            return None
+        if at.timestamp() <= now - 86400 * 180:          # 寫的是明年一月這種
+            at = at.replace(year=at.year + 1)
+    elif at.timestamp() <= now:
         at += datetime.timedelta(days=1)
     return at.timestamp() + 60                      # 多等一分鐘，別剛好卡在邊上
+
+
+def quota_reset(text, now=None):
+    """同 quota_reset_at，讀不懂就 15 分鐘後再試。"""
+    now = now or time.time()
+    return quota_reset_at(text, now) or now + 900
+
+
+def quota_stuck(session):
+    """這個 Claude 對話是不是停在額度用完：最後一則回應是「You've hit your … limit · resets …」那種假回應，
+    之後也沒有人再講話。回傳 (撞到的時間, 重置時間)；沒停在那裡、或讀不懂重置時間，回 None。"""
+    found = claude_transcript(session)
+    if not found:
+        return None
+    try:
+        with open(found[0], "rb") as fh:
+            fh.seek(max(0, os.path.getsize(found[0]) - 262144))
+            lines = fh.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        msg = row.get("message") or {}
+        content = msg.get("content")
+        if row.get("type") == "user" and not row.get("isMeta"):
+            if isinstance(content, list) and any(isinstance(c, dict) and c.get("type") == "tool_result" for c in content):
+                return None                         # 工具結果：那一輪還在跑
+            return None                             # 撞到之後又有人講話：交給那一輪，不是卡著
+        if row.get("type") != "assistant":
+            continue
+        text = " ".join(c.get("text", "") for c in content if isinstance(c, dict)) if isinstance(content, list) else str(content or "")
+        if msg.get("model") != "<synthetic>" or not QUOTA_HIT.search(text):
+            return None                             # 最後一則是正常回應
+        try:
+            hit = datetime.datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).timestamp()
+        except (KeyError, ValueError):
+            return None
+        reset = quota_reset_at(text, hit)
+        return (hit, reset) if reset else None
+    return None
+
+
+def quota_woken(session, hit=None):
+    """額度重置後叫醒過的那一次撞到額度的時間（存檔：同一次撞到只叫一次，轉送程式重啟也記得）。"""
+    path = os.path.expanduser(f"~/.local/state/agent-rooms/quota-woken-{session}")
+    if hit is not None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(str(hit))
+    try:
+        with open(path) as fh:
+            return float(fh.read().strip())
+    except (OSError, ValueError):
+        return 0.0
 
 
 def claude_running(session):

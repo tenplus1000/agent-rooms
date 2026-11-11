@@ -115,6 +115,59 @@ class ReopenTest(unittest.TestCase):
             script = (state / ".local/state/agent-rooms/reopen-s-2.sh").read_text()
         self.assertIn(f"export CLAUDE_CONFIG_DIR=\"{other}\"", script)
 
+    def test_quota_reset_reads_weekly_dates(self):
+        import datetime
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Asia/Taipei")
+        now = datetime.datetime(2026, 11, 12, 2, 0, tzinfo=tz).timestamp()
+        at = dispatch.quota_reset_at("You've hit your 5-hour limit · resets 3:30am (Asia/Taipei)", now)
+        self.assertEqual(datetime.datetime.fromtimestamp(at - 60, tz).strftime("%m-%d %H:%M"), "11-12 03:30")
+        at = dispatch.quota_reset_at("You've hit your weekly limit · resets Nov 18, 1am (Asia/Taipei)", now)
+        self.assertEqual(datetime.datetime.fromtimestamp(at - 60, tz).strftime("%m-%d %H:%M"), "11-18 01:00")
+        self.assertIsNone(dispatch.quota_reset_at("You've hit your limit", now))
+        self.assertAlmostEqual(dispatch.quota_reset("看不懂", now), now + 900)
+
+    def _transcript(self, rows):
+        (self.home / "projects" / "-work" / "s-q.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+
+    def test_quota_stuck_only_when_last_reply_is_the_limit_notice(self):
+        hit = "2026-11-11T19:15:58.000Z"
+        limit = {"type": "assistant", "timestamp": hit, "message": {"model": "<synthetic>", "content": [
+            {"type": "text", "text": "You've hit your 5-hour limit · resets 5:50am (Asia/Taipei)"}]}}
+        user = {"type": "user", "cwd": "/w", "message": {"content": "做吧"}}
+        self._transcript([user, limit, {"type": "system"}])
+        got = dispatch.quota_stuck("s-q")
+        self.assertIsNotNone(got)
+        self.assertGreater(got[1], got[0])
+        self._transcript([user, limit, user])                     # 撞到之後又有人講話：那一輪在跑，不算卡著
+        self.assertIsNone(dispatch.quota_stuck("s-q"))
+        normal = {"type": "assistant", "timestamp": hit, "message": {"model": "claude-x", "content": [{"type": "text", "text": "好"}]}}
+        self._transcript([user, limit, user, normal])
+        self.assertIsNone(dispatch.quota_stuck("s-q"))
+
+    def test_quota_wake_posts_once_after_reset(self):
+        import tempfile
+        state = Path(tempfile.mkdtemp())
+        posts = []
+
+        def fake_call(method, path, **kw):
+            if path == "/api/overview":
+                return {"agents": [{"session": "s-q", "name": "主持", "room_id": "R9", "off": None}]}
+            posts.append((path, kw))
+            return {}
+        w = dispatch.ClaudeWorker.__new__(dispatch.ClaudeWorker)
+        w.session = "s-q"
+        with mock.patch.object(dispatch, "quota_stuck", return_value=(1000.0, 2000.0)), \
+                mock.patch.object(dispatch, "call", side_effect=fake_call), \
+                mock.patch.dict(os.environ, {"HOME": str(state)}), mock.patch.object(dispatch, "log"):
+            self.assertFalse(w.quota_wake(now=1500.0))           # 還沒重置
+            self.assertTrue(w.quota_wake(now=2100.0))
+            self.assertFalse(w.quota_wake(now=2200.0))           # 同一次撞到只叫一次
+        room_posts = [p for p in posts if p[0] == "/api/rooms/R9/post"]
+        self.assertEqual(len(room_posts), 1)
+        self.assertTrue(room_posts[0][1]["text"].startswith("@主持"))
+        self.assertEqual(room_posts[0][1]["as"], "s-q")
+
 
 if __name__ == "__main__":
     unittest.main()
