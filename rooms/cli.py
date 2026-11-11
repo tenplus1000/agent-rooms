@@ -519,23 +519,26 @@ def show(result):
     print(json.dumps(result, ensure_ascii=False, indent=1))
 
 
-def accounts_now():
-    """各帳號現在的額度與在跑幾個（先問本機小幫手，它有快取；問不到就自己讀）。"""
+def accounts_now(force=False):
+    """各帳號現在的額度與在跑幾個（先問本機小幫手，它有快取；問不到就自己讀）。
+
+    force：不吃快取、當場重問（被限流的等待照樣要等）。開成員、看 quota 都要當場的數字，
+    快取裡十分鐘前的數字在成員狂跑時會差二三十個百分點。"""
     try:
-        req = urllib.request.Request("http://127.0.0.1:8777/local/accounts",
+        req = urllib.request.Request("http://127.0.0.1:8777/local/accounts" + ("?force=1" if force else ""),
                                      headers={"X-Rooms-Local": "1", "Origin": "http://localhost:8775"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception:
         from rooms import local
-        return local.accounts_view()
+        return local.accounts_view(force)
 
 
 def spawn_notes(room, name, account, home, claude, model):
     """開成員時給主持看的提醒（不擋）：使用者的原則是一次一兩個、額度到提醒線先停、名字別互相是開頭。"""
     from rooms import quota
     notes = []
-    rows = {r["name"]: r for r in accounts_now()}
+    rows = {r["name"]: r for r in accounts_now(force=True)}
     row = rows.get(account) or {}
     u = row.get("usage") or {}
     if row:
@@ -695,7 +698,7 @@ def main(argv=None):
         return local.serve()
     if a.cmd == "quota":
         from rooms import quota
-        for row in accounts_now():
+        for row in accounts_now(force=True):
             print(quota.line(row) + (f"　在跑 {row['running']} 個：{'、'.join(row['running_names'])}" if row.get("running") else ""))
         return
     if not actor and a.cmd not in ("overview", "quota"):

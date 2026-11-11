@@ -305,7 +305,7 @@ def line(row):
     u = row.get("usage") or {}
     if u.get("error"):
         return f"{row['name']}（{row['kind']}）：{u['error']}"
-    note = f"（{u['stale']}）" if u.get("stale") else ""
+    note = f"（{u['stale']}）" if u.get("stale") else (f"（{_hhmm(u['checked'])} 查的）" if u.get("checked") else "")
 
     def part(label, w):
         if not w or w.get("used") is None:
