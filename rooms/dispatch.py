@@ -610,11 +610,8 @@ def claude_transcript(session):
     return found[0], cwd or os.path.expanduser("~"), mode, home
 
 
-def _token_line(home):
-    """視窗腳本裡讀長效 token 的那一行：只寫檔案路徑，token 本身不進腳本。"""
-    from rooms import quota
-    path = quota.claude_token_file(home)
-    return f'export CLAUDE_CODE_OAUTH_TOKEN="$(cat {json.dumps(str(path))[1:-1]})"\n' if path else ""
+# 重開的視窗不帶長效 token：長效 token 只有推論權限，帶了之後 Remote Control 等要完整登入的功能都不能用。
+# 長效 token 只給背景成員（claude -p）用。
 
 
 def open_claude(session, name, cwd, mode, home=None):
@@ -628,7 +625,6 @@ def open_claude(session, name, cwd, mode, home=None):
         fh.write("#!/bin/bash -l\n# 房間轉送程式產生：接回關掉的 Claude 對話\n"
                  f"cd {json.dumps(cwd)} || cd ~\n"
                  + (f"export CLAUDE_CONFIG_DIR={json.dumps(home)}\n" if home and home != CLAUDE_HOME else "")
-                 + _token_line(home or CLAUDE_HOME)
                  + "exec " + " ".join(json.dumps(a, ensure_ascii=False) for a in args) + "\n")
     os.chmod(script, 0o700)
     if CLAUDE_OPEN:
