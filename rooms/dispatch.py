@@ -768,6 +768,10 @@ class ClaudeWorker(Worker):
 
 # 額度用完的訊息（「You've hit your session limit」「You've hit your 5-hour limit」「…weekly limit」）
 QUOTA_HIT = re.compile(r"hit your [\w -]*limit", re.I)
+# 模型端的安全過濾擋下這一輪（不是額度、不是程式錯）。擋過的對話再送還是會被擋，錯誤訊息自己建議換模型。
+SAFEGUARD_HIT = re.compile(r"safeguards flagged", re.I)
+# 被擋時這個成員改用的模型；設成空字串就不自動換
+SAFEGUARD_MODEL = os.environ.get("ROOMS_SAFEGUARD_MODEL", "opus").strip()
 
 
 def quota_until(account, until=None):
@@ -992,6 +996,16 @@ class HeadlessClaudeWorker(Worker):
             call("POST", "/api/rewind", session=self.session, room_id=room_id, seq=events[0]["seq"] - 1)
             at = datetime.datetime.fromtimestamp(until).astimezone().strftime("%H:%M")
             self.fail("quota_wait", f"{member['account']} 的額度用完了，這一批留著，約 {at} 重置後自動補送", events)
+            return
+        if ((done.returncode or result.get("is_error")) and SAFEGUARD_HIT.search(said)
+                and SAFEGUARD_MODEL and member.get("model") != SAFEGUARD_MODEL):
+            # 換模型接著做同一批：記在成員檔，之後每一輪都用新模型；游標倒回，這一批重送一次
+            before = member.get("model") or "帳號預設"
+            member["model"] = SAFEGUARD_MODEL
+            with open(os.path.join(CLAUDE_MEMBERS, self.session + ".json"), "w", encoding="utf-8") as fh:
+                json.dump(member, fh, ensure_ascii=False, indent=1)
+            call("POST", "/api/rewind", session=self.session, room_id=room_id, seq=events[0]["seq"] - 1)
+            self.note("model_switch", f"{before} 的安全過濾擋下這一輪，這個成員改用 {SAFEGUARD_MODEL}，同一批訊息自動重送")
             return
         if done.returncode or result.get("is_error"):
             self.fail("failed_after", f"那一輪沒跑完（{str(result.get('result') or '')[:200] or '程式被停掉或中斷，沒有留下原因'}）；"
