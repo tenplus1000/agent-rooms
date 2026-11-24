@@ -770,8 +770,6 @@ class ClaudeWorker(Worker):
 QUOTA_HIT = re.compile(r"hit your [\w -]*limit", re.I)
 # 模型端的安全過濾擋下這一輪（不是額度、不是程式錯）。擋過的對話再送還是會被擋，錯誤訊息自己建議換模型。
 SAFEGUARD_HIT = re.compile(r"safeguards flagged", re.I)
-# 被擋時這個成員改用的模型；設成空字串就不自動換
-SAFEGUARD_MODEL = os.environ.get("ROOMS_SAFEGUARD_MODEL", "opus").strip()
 
 
 def quota_until(account, until=None):
@@ -997,15 +995,15 @@ class HeadlessClaudeWorker(Worker):
             at = datetime.datetime.fromtimestamp(until).astimezone().strftime("%H:%M")
             self.fail("quota_wait", f"{member['account']} 的額度用完了，這一批留著，約 {at} 重置後自動補送", events)
             return
-        if ((done.returncode or result.get("is_error")) and SAFEGUARD_HIT.search(said)
-                and SAFEGUARD_MODEL and member.get("model") != SAFEGUARD_MODEL):
-            # 換模型接著做同一批：記在成員檔，之後每一輪都用新模型；游標倒回，這一批重送一次
-            before = member.get("model") or "帳號預設"
-            member["model"] = SAFEGUARD_MODEL
-            with open(os.path.join(CLAUDE_MEMBERS, self.session + ".json"), "w", encoding="utf-8") as fh:
-                json.dump(member, fh, ensure_ascii=False, indent=1)
-            call("POST", "/api/rewind", session=self.session, room_id=room_id, seq=events[0]["seq"] - 1)
-            self.note("model_switch", f"{before} 的安全過濾擋下這一輪，這個成員改用 {SAFEGUARD_MODEL}，同一批訊息自動重送")
+        if (done.returncode or result.get("is_error")) and SAFEGUARD_HIT.search(said):
+            # 擋過的對話之後每一則都會再被擋：直接標下線，主持就不會再對它重送、白白多燒一輪。
+            # 不自動換模型（換 Opus 整包跑太貴），也不自動重開，交給主持用同一個模型開新成員接同一段。
+            try:
+                call("POST", "/api/off", session=self.session, on=1, reason="被安全過濾擋下", **{"as": self.session})
+            except Exception as error:
+                log(self.session, "標下線失敗", error)
+            self.fail("safeguard", f"這一輪被模型的安全過濾擋下（{str(result.get('result') or '')[:80]}…）。擋過的對話再送也會被擋，"
+                      f"已標下線；同一段請開新成員（同模型）從頭接，答案檔裡已寫的不用重做", events)
             return
         if done.returncode or result.get("is_error"):
             self.fail("failed_after", f"那一輪沒跑完（{str(result.get('result') or '')[:200] or '程式被停掉或中斷，沒有留下原因'}）；"
