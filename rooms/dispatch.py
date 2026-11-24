@@ -610,6 +610,13 @@ def claude_transcript(session):
     return found[0], cwd or os.path.expanduser("~"), mode, home
 
 
+def _token_line(home):
+    """視窗腳本裡讀長效 token 的那一行：只寫檔案路徑，token 本身不進腳本。"""
+    from rooms import quota
+    path = quota.claude_token_file(home)
+    return f'export CLAUDE_CODE_OAUTH_TOKEN="$(cat {json.dumps(str(path))[1:-1]})"\n' if path else ""
+
+
 def open_claude(session, name, cwd, mode, home=None):
     """開一個新視窗接回這個 Claude 對話。成功回 None，不行就回原因。"""
     state = os.path.expanduser("~/.local/state/agent-rooms")
@@ -621,6 +628,7 @@ def open_claude(session, name, cwd, mode, home=None):
         fh.write("#!/bin/bash -l\n# 房間轉送程式產生：接回關掉的 Claude 對話\n"
                  f"cd {json.dumps(cwd)} || cd ~\n"
                  + (f"export CLAUDE_CONFIG_DIR={json.dumps(home)}\n" if home and home != CLAUDE_HOME else "")
+                 + _token_line(home or CLAUDE_HOME)
                  + "exec " + " ".join(json.dumps(a, ensure_ascii=False) for a in args) + "\n")
     os.chmod(script, 0o700)
     if CLAUDE_OPEN:
@@ -937,6 +945,12 @@ class HeadlessClaudeWorker(Worker):
         env.pop("CLAUDE_CONFIG_DIR", None)
         if os.path.realpath(member["home"]) != os.path.realpath(os.path.expanduser("~/.claude")):
             env["CLAUDE_CONFIG_DIR"] = member["home"]     # 預設帳號不設：設了它會改到那個資料夾裡找 .claude.json
+        from rooms import quota
+        token = quota.claude_token(member["home"])
+        if token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = token          # 長效 token：登入檔過期也照樣跑
+        else:
+            env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
         os.makedirs(os.path.join(CLAUDE_MEMBERS, "logs"), exist_ok=True)
         with open(os.path.join(CLAUDE_MEMBERS, "logs", self.session + ".jsonl"), "a", encoding="utf-8") as out:
             # 訊息從 stdin 送：第一次叫醒會帶整段房間歷史，放在參數裡會超過系統上限（Argument list too long）。

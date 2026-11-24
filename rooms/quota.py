@@ -12,6 +12,7 @@ ROOMS_CLAUDE_HOMES／ROOMS_CODEX_HOMES 裡取的名字優先用。
 Claude 10 分鐘、Codex 5 分鐘內不重問。用量網址查太頻繁會回 429：這時照舊顯示上次查到的數字並註明時間，
 隔 10、20、40… 分鐘（最多 1 小時）再試。token 只在這台機器上用，不印、不存。
 """
+import re
 import fcntl
 import json
 import os
@@ -97,6 +98,28 @@ def remove(name):
     rows = [r for r in accounts() if r["name"] != name]
     save(rows)
     return rows
+
+
+TOKENS = Path(os.path.expanduser(os.environ.get("ROOMS_CLAUDE_TOKENS", "~/.config/claude-tokens")))
+
+
+def claude_token_file(home):
+    """這個 Claude 帳號資料夾的長效 token 檔（`claude setup-token` 拿到的，約一年）：~/.claude → claude.token、
+    ~/.claude-accountN → claudeN.token。沒有就回 None，照舊用登入檔。內容不印、不寫進紀錄。"""
+    base = Path(home).name
+    m = re.fullmatch(r"\.claude(?:-account(\d+))?", base)
+    if not m:
+        return None
+    path = TOKENS / f"claude{m.group(1) or ''}.token"
+    return path if path.is_file() else None
+
+
+def claude_token(home):
+    path = claude_token_file(home)
+    try:
+        return path.read_text(encoding="utf-8").strip() or None if path else None
+    except OSError:
+        return None
 
 
 def _claude_creds(home):
