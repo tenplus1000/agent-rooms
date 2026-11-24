@@ -247,6 +247,15 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(texts, ["第一則"])
         self.assertEqual(self.core.history("s-cx1", self.room)[0]["type"], "room_created")
 
+    def test_spawned_member_gets_assignment_without_old_room_backlog(self):
+        self.core.post("s-claude", self.room, "別人的舊工作與討論")
+        self.core.register("s-new", "claude", "新人", spawned_by="s-claude")
+        self.core.move("s-new", "s-new", self.room)
+        self.core.post("s-claude", self.room, "@新人 只做這一段")
+        texts = [e.get("text") for e in self.drain("s-new") if e["type"] == "post"]
+        self.assertEqual(texts, ["@新人 只做這一段"])
+        self.assertEqual(self.core.history("s-new", self.room)[0]["type"], "room_created")
+
     def test_assignment_is_not_buried_under_a_long_backlog(self):
         # 房裡已經幾百則才進來：派工那則一定在第一批，舊的換成一則「還有幾則」，之後不再一批批補送
         for k in range(30):

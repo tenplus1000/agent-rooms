@@ -450,8 +450,14 @@ class Core:
                 self._emit(before, "leave", session)
             agent["room_id"] = room_id
             if room_id:
-                # 後進房的人看得到全部紀錄：cursor 從 0 起，第一次監聽就拿到開房以來的事
-                agent["cursor"].setdefault(room_id, 0)
+                if room_id not in agent["cursor"] and (agent.get("headless") or {}).get("spawned"):
+                    # 房間臨時開的背景成員只需要接下來的派工；把整間房的舊對話塞進
+                    # 第一輪既浪費 token，也會把別人的任務與用途誤算成它的上下文。
+                    rows = self.events.get(room_id, [])
+                    agent["cursor"][room_id] = rows[-1]["seq"] if rows else 0
+                else:
+                    # 一般後進房的人看得到全部紀錄：第一次監聽就拿到開房以來的事
+                    agent["cursor"].setdefault(room_id, 0)
                 self._emit(room_id, "join", session)
             with (self.data / "moves.jsonl").open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"at": _now(), "session": session, "by": actor,
