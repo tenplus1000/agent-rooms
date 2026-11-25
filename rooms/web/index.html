@@ -86,7 +86,8 @@ button.danger:hover { border-color: var(--bad); color: var(--bad); }
 #toolpane .body { flex: 1; overflow: auto; padding: 10px 12px; }
 #toolpane pre { white-space: pre-wrap; font-size: 12px; margin: 0; }
 .seg { display: flex; gap: 6px; margin-bottom: 10px; }
-#quota { position: fixed; left: 8px; top: calc(var(--top-h, 44px) + 10px); width: 150px; pointer-events: none; z-index: 16; display: none; flex-direction: column; gap: 6px; }
+#quota { position: fixed; left: 8px; top: calc(var(--top-h, 44px) + 10px); width: 150px; max-height: calc(100vh - var(--top-h, 44px) - 20px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; pointer-events: auto; z-index: 16; display: none; flex-direction: column; gap: 6px; }
+#quota > * { flex-shrink: 0; }   /* 卡片多到超出畫面時整欄捲動，不壓扁卡片 */
 #quota .qh { pointer-events: auto; font-size: 10px; color: var(--dim); display: flex; justify-content: space-between; align-items: center; }
 #quota .qh b { cursor: pointer; font-weight: 400; }
 .qcard { pointer-events: auto; background: rgba(20,24,31,0.88); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; cursor: pointer; font-size: 11px; }
