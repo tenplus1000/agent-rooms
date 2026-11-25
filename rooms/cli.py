@@ -271,6 +271,8 @@ def hook():
             pass                  # 記不了也不能擋住對話
         if event_name in ("Stop", "SessionStart"):
             # Stop：每輪做完就等房間；SessionStart：剛開或 resume、還沒跑過任何一輪的對話也要等得到
+            if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+                return            # `claude -p` 這類程式呼叫：它會等背景 hook 結束才退出，在這裡等房間會讓它卡死
             _hook_deadline = None    # 這條會一直等房間，時限不適用
             return rewake(session)
         full = event_name == "UserPromptSubmit"
