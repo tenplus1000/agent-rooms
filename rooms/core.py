@@ -113,6 +113,13 @@ class Core:
         self.state["seq"][kind] += 1
         return f"{prefix}{self.state['seq'][kind]}"
 
+    def _free_room_id(self):
+        """房號用最小的空號：刪掉的房間讓出號碼（舊的游標、任務、討論串在刪房時已經跟它脫鉤）。"""
+        n = 1
+        while f"R{n}" in self.state["rooms"] or (self.data / "rooms" / f"R{n}.jsonl").exists():
+            n += 1
+        return f"R{n}"
+
     def _emit(self, room_id, kind, actor, **fields):
         rows = self.events.setdefault(room_id, [])
         event = {"seq": len(rows) + 1, "at": _now(), "room_id": room_id, "type": kind,
@@ -238,7 +245,7 @@ class Core:
                     raise RoomError("只有使用者或維修能替房間指定別的負責人", 403)
                 if owner != USER:
                     self._agent(owner)
-            room_id = self._next("room", "R")
+            room_id = self._free_room_id()
             self.state["rooms"][room_id] = {"room_id": room_id, "name": name.strip(), "owner": owner or actor,
                                             "created_at": _now(), "whiteboard": ""}
             self.events[room_id] = []
@@ -265,12 +272,20 @@ class Core:
                 raise RoomError(f"{room['name']} 裡還有人：先把成員移出去（move <名字> none）再刪")
             archive = self.data / "rooms" / "deleted"
             archive.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
             source = self._events_path(room_id)
             if source.exists():
-                source.rename(archive / f"{room_id}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.jsonl")
+                source.rename(archive / f"{room_id}-{stamp}.jsonl")
             for thread in self.state["threads"].values():
                 if thread["room_id"] == room_id and not thread.get("closed"):
                     thread.update(closed=_now(), closed_by=actor, note="房間刪掉了")
+            # 號碼會讓給下一間新房：舊房的游標、任務、討論串改掛封存名，免得新房接到舊的讀取位置或任務
+            gone = f"{room_id}~{stamp}"
+            for agent in self.state["agents"].values():
+                agent.get("cursor", {}).pop(room_id, None)
+            for item in list(self.state["threads"].values()) + list(self.state["tasks"].values()):
+                if item.get("room_id") == room_id:
+                    item["room_id"] = gone
             del self.state["rooms"][room_id]
             self.events.pop(room_id, None)
             with (self.data / "moves.jsonl").open("a", encoding="utf-8") as fh:
@@ -391,7 +406,7 @@ class Core:
             for room_id, room in self.state["rooms"].items():
                 if room.get("desk") == session:
                     return dict(room)
-            room_id = self._next("room", "R")
+            room_id = self._free_room_id()
             self.state["rooms"][room_id] = {"room_id": room_id, "name": f"{self.name_of(session)} 的專屬管道",
                                             "owner": USER, "created_at": _now(), "whiteboard": "", "desk": session}
             self.events[room_id] = []

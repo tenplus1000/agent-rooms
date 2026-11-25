@@ -721,3 +721,21 @@ class DispatchTest(LiveServer):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RoomNumberReuseTest(unittest.TestCase):
+    def test_deleted_number_is_reused_without_old_cursor(self):
+        with tempfile.TemporaryDirectory() as d:
+            core = Core(d)
+            core.register("s-a", "codex", "a")
+            first = core.create_room(USER, "一")["room_id"]
+            second = core.create_room(USER, "二")["room_id"]
+            core.move("s-a", "s-a", first)
+            core.post("s-a", first, "hello")
+            core.listen("s-a", wait=0)
+            core.move("s-a", "s-a", None)
+            core.delete_room(USER, first)
+            self.assertNotIn(first, core.state["agents"]["s-a"]["cursor"])
+            again = core.create_room(USER, "三")["room_id"]
+            self.assertEqual(again, first)
+            self.assertNotEqual(again, second)
